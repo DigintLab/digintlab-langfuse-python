@@ -3,31 +3,24 @@ updates:
   - package-ecosystem: "uv"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: monthly
+      time: "12:00"
     cooldown:
       default-days: 7
     groups:
-      python-version-dependencies:
-        applies-to: "version-updates"
-        patterns:
-          - "*"
-      python-security-dependencies:
-        applies-to: "security-updates"
-        patterns:
-          - "*"
+      digintlab-langfuse-python:
+        dependency-type: "production"
+      digintlab-langfuse-python-dev:
+        dependency-type: "development"
 
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: monthly
+      time: "12:00"
     cooldown:
       default-days: 7
     groups:
-      github-actions-version-dependencies:
-        applies-to: "version-updates"
-        patterns:
-          - "*"
-      github-actions-security-dependencies:
-        applies-to: "security-updates"
+      actions-deps:
         patterns:
           - "*"
