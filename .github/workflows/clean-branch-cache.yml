@@ -1,0 +1,13 @@
+name: Cleanup caches by branch
+
+on:
+  pull_request:
+    types:
+      - closed
+
+jobs:
+  cleanup:
+    if: github.event.pull_request.merged == true
+    permissions:
+      actions: write
+    uses: DigintLab/github/.github/workflows/clean-branch-cache.yml@cleanup-v0
