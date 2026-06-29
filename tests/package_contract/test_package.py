@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from langfuse.api.commons.types import ObservationLevel
 from langfuse.model import ChatPromptClient, TextPromptClient
-from opentelemetry.sdk.trace import ReadableSpan
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 
 import digintlab_langfuse
 from digintlab_langfuse.client import LangfuseClientConfig, LangfuseTelemetry, init_langfuse_client
@@ -26,7 +26,7 @@ from digintlab_langfuse.prompts import (
     get_prompt,
 )
 from digintlab_langfuse.scores import BooleanScore, NumericScore, ScoreTarget, emit_score
-from digintlab_langfuse.spans import observe_generation
+from digintlab_langfuse.spans import observe_generation, scrub_auth_header
 from digintlab_langfuse.types import JsonValue
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[2] / "src" / "digintlab_langfuse"
@@ -168,6 +168,25 @@ def test_init_instruments_selected_project_hooks() -> None:
     assert telemetry.client is client
     httpx_instrumentor.return_value.instrument.assert_called_once()
     botocore_instrumentor.return_value.instrument.assert_called_once()
+
+
+def test_configured_tracer_provider_reaches_process_instrumentors() -> None:
+    from digintlab_langfuse.client import init_langfuse_telemetry
+
+    client = MagicMock()
+    tracer_provider = TracerProvider()
+    with (
+        patch("digintlab_langfuse.client.init_langfuse_client", return_value=client),
+        patch("digintlab_langfuse.client.HTTPXClientInstrumentor") as httpx_instrumentor,
+        patch("digintlab_langfuse.client.BotocoreInstrumentor") as botocore_instrumentor,
+    ):
+        init_langfuse_telemetry(
+            LangfuseClientConfig(public_key="pk", secret_key="sk", tracer_provider=tracer_provider),
+            instrument_botocore=True,
+        )
+
+    httpx_instrumentor.return_value.instrument.assert_called_once_with(request_hook=scrub_auth_header, tracer_provider=tracer_provider)
+    botocore_instrumentor.return_value.instrument.assert_called_once_with(tracer_provider=tracer_provider)
 
 
 def test_langchain_callbacks_uses_sdk_handler_outside_proxy_mode() -> None:

@@ -30,7 +30,7 @@ uv run pytest
 
 This library is intentionally small:
 
-- `digintlab_langfuse.client` builds Langfuse clients, owns instrumentation, and provides trace context managers.
+- `digintlab_langfuse.client` builds Langfuse clients, owns instrumentation, forwards configured tracer providers to HTTP/AWS instrumentors, and provides trace context managers.
 - `digintlab_langfuse.spans` opens observations, generation spans, guardrail observations, and HTTP auth redaction hooks.
 - `digintlab_langfuse.callbacks` emits Langfuse tool observations from LangChain tool callbacks.
 - `digintlab_langfuse.litellm` forwards active Langfuse trace metadata into LiteLLM-compatible request kwargs.
