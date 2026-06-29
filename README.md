@@ -35,6 +35,7 @@ This library is intentionally small:
 - `digintlab_langfuse.callbacks` emits Langfuse tool observations from LangChain tool callbacks.
 - `digintlab_langfuse.litellm` forwards active Langfuse trace metadata into LiteLLM-compatible request kwargs.
 - `digintlab_langfuse.scores` provides typed score helpers for trace, observation, span, and session scores.
+- `digintlab_langfuse.timing` provides local elapsed timers and OpenTelemetry span timing aggregation.
 
 Prompt and experiment helpers exist for Langfuse workflows, but applications should expose them only when they have a real product use case.
 

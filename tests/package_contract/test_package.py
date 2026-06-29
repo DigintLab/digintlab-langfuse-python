@@ -27,6 +27,7 @@ from digintlab_langfuse.prompts import (
 )
 from digintlab_langfuse.scores import BooleanScore, NumericScore, ScoreTarget, emit_score
 from digintlab_langfuse.spans import observe_generation, scrub_auth_header
+from digintlab_langfuse.timing import SpanTimingProcessor, elapsed_timer
 from digintlab_langfuse.types import JsonValue
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[2] / "src" / "digintlab_langfuse"
@@ -47,6 +48,8 @@ EXPECTED_ROOT_EXPORTS = [
     "Score",
     "ScoreDataType",
     "ScoreTarget",
+    "SpanTimingBucket",
+    "SpanTimingProcessor",
     "TextManagedPrompt",
     "TextPromptRequest",
     "TextScore",
@@ -58,6 +61,7 @@ EXPECTED_ROOT_EXPORTS = [
     "emit_numeric_score",
     "emit_score",
     "emit_text_score",
+    "elapsed_timer",
     "get_prompt",
     "init_langfuse_client",
     "init_langfuse_telemetry",
@@ -187,6 +191,51 @@ def test_configured_tracer_provider_reaches_process_instrumentors() -> None:
 
     httpx_instrumentor.return_value.instrument.assert_called_once_with(request_hook=scrub_auth_header, tracer_provider=tracer_provider)
     botocore_instrumentor.return_value.instrument.assert_called_once_with(tracer_provider=tracer_provider)
+
+
+def test_elapsed_timer_measures_local_block() -> None:
+    with patch("digintlab_langfuse.timing.time.monotonic", side_effect=[10.0, 10.1234, 10.5]):
+        with elapsed_timer() as timer:
+            assert timer.rounded(3) == 0.123
+
+        assert timer.elapsed_seconds == 0.5
+        assert timer.stop() == 0.5
+
+
+def test_span_timing_processor_aggregates_ended_spans() -> None:
+    processor = SpanTimingProcessor()
+    provider = TracerProvider()
+    provider.add_span_processor(processor)
+    tracer = provider.get_tracer("package-test")
+
+    with tracer.start_as_current_span("http.request"):
+        pass
+    with tracer.start_as_current_span("http.request"):
+        pass
+
+    buckets = processor.snapshot(reset=True)
+
+    assert len(buckets) == 1
+    assert buckets[0].key == "package-test:http.request"
+    assert buckets[0].count == 2
+    assert buckets[0].total_elapsed_seconds > 0
+    assert buckets[0].max_elapsed_seconds > 0
+    assert processor.snapshot() == ()
+
+
+def test_span_timing_processor_accepts_custom_bucket_key() -> None:
+    def server_address(span: ReadableSpan) -> str:
+        return str((span.attributes or {}).get("server.address", ""))
+
+    processor = SpanTimingProcessor(key=server_address)
+    provider = TracerProvider()
+    provider.add_span_processor(processor)
+    tracer = provider.get_tracer("package-test")
+
+    with tracer.start_as_current_span("GET", attributes={"server.address": "api.example"}):
+        pass
+
+    assert processor.snapshot()[0].key == "api.example"
 
 
 def test_langchain_callbacks_uses_sdk_handler_outside_proxy_mode() -> None:
