@@ -121,12 +121,14 @@ class LangfuseTelemetry:
         public_key: str,
         instrument_httpx: bool,
         instrument_botocore: bool,
+        tracer_provider: TracerProvider | None = None,
         redact_http_auth_headers: bool = True,
     ) -> None:
         self.client = client
         self._langchain_handler = LangfuseCallbackHandler(public_key=public_key)
         self._httpx_instrumentor = HTTPXClientInstrumentor() if instrument_httpx else None
         self._botocore_instrumentor = BotocoreInstrumentor() if instrument_botocore else None  # type: ignore[no-untyped-call]
+        self._tracer_provider = tracer_provider
         self._redact_http_auth_headers = redact_http_auth_headers
         self._instrumented = False
 
@@ -134,13 +136,16 @@ class LangfuseTelemetry:
         """Install configured process-level OpenTelemetry instrumentors."""
         if self._instrumented:
             return
+        instrumentor_kwargs: dict[str, TracerProvider] = {}
+        if self._tracer_provider is not None:
+            instrumentor_kwargs["tracer_provider"] = self._tracer_provider
         if self._botocore_instrumentor is not None:
-            self._botocore_instrumentor.instrument()
+            self._botocore_instrumentor.instrument(**instrumentor_kwargs)
         if self._httpx_instrumentor is not None:
             if self._redact_http_auth_headers:
-                self._httpx_instrumentor.instrument(request_hook=scrub_auth_header)
+                self._httpx_instrumentor.instrument(request_hook=scrub_auth_header, **instrumentor_kwargs)
             else:
-                self._httpx_instrumentor.instrument()
+                self._httpx_instrumentor.instrument(**instrumentor_kwargs)
         self._instrumented = True
 
     def uninstrument(self) -> None:
@@ -259,6 +264,7 @@ def init_langfuse_telemetry(
         public_key=config.public_key,
         instrument_httpx=instrument_httpx,
         instrument_botocore=instrument_botocore,
+        tracer_provider=config.tracer_provider,
         redact_http_auth_headers=config.redact_http_auth_headers,
     )
     telemetry.instrument()
