@@ -40,6 +40,20 @@ from digintlab_langfuse.types import JsonValue, to_json_value
 LANGFUSE_DEFAULT_BASE_URL = "https://cloud.langfuse.com"
 
 
+def _score_target(
+    *,
+    run_id: str | None,
+    trace_id: str | None,
+    target: ScoreTarget,
+) -> ScoreTarget:
+    if run_id is None and trace_id is None:
+        return target
+    if target is not DEFAULT_SCORE_TARGET:
+        msg = "Pass either target or run_id/trace_id, not both."
+        raise ValueError(msg)
+    return ScoreTarget(run_id=run_id, trace_id=trace_id)
+
+
 class LangfuseInitKwargs(TypedDict):
     """Keyword arguments forwarded to the Langfuse SDK client."""
 
@@ -261,21 +275,53 @@ class LangfuseTelemetry:
         """Emit a typed Langfuse score with this telemetry client's SDK client."""
         emit_score(self.client, score=score, target=target)
 
-    def emit_numeric_score(self, name: str, value: float, *, target: ScoreTarget = DEFAULT_SCORE_TARGET) -> None:
+    def emit_numeric_score(
+        self,
+        name: str,
+        value: float,
+        *,
+        run_id: str | None = None,
+        trace_id: str | None = None,
+        target: ScoreTarget = DEFAULT_SCORE_TARGET,
+    ) -> None:
         """Emit a numeric Langfuse score with this telemetry client's SDK client."""
-        self.emit_score(score=NumericScore(name=name, value=value), target=target)
+        self.emit_score(score=NumericScore(name=name, value=value), target=_score_target(run_id=run_id, trace_id=trace_id, target=target))
 
-    def emit_categorical_score(self, name: str, value: str, *, target: ScoreTarget = DEFAULT_SCORE_TARGET) -> None:
+    def emit_categorical_score(
+        self,
+        name: str,
+        value: str,
+        *,
+        run_id: str | None = None,
+        trace_id: str | None = None,
+        target: ScoreTarget = DEFAULT_SCORE_TARGET,
+    ) -> None:
         """Emit a categorical Langfuse score with this telemetry client's SDK client."""
-        self.emit_score(score=CategoricalScore(name=name, value=value), target=target)
+        self.emit_score(score=CategoricalScore(name=name, value=value), target=_score_target(run_id=run_id, trace_id=trace_id, target=target))
 
-    def emit_boolean_score(self, name: str, value: bool, *, target: ScoreTarget = DEFAULT_SCORE_TARGET) -> None:
+    def emit_boolean_score(
+        self,
+        name: str,
+        value: bool,
+        *,
+        run_id: str | None = None,
+        trace_id: str | None = None,
+        target: ScoreTarget = DEFAULT_SCORE_TARGET,
+    ) -> None:
         """Emit a boolean Langfuse score with this telemetry client's SDK client."""
-        self.emit_score(score=BooleanScore(name=name, value=value), target=target)
+        self.emit_score(score=BooleanScore(name=name, value=value), target=_score_target(run_id=run_id, trace_id=trace_id, target=target))
 
-    def emit_text_score(self, name: str, value: str, *, target: ScoreTarget = DEFAULT_SCORE_TARGET) -> None:
+    def emit_text_score(
+        self,
+        name: str,
+        value: str,
+        *,
+        run_id: str | None = None,
+        trace_id: str | None = None,
+        target: ScoreTarget = DEFAULT_SCORE_TARGET,
+    ) -> None:
         """Emit a text Langfuse score with this telemetry client's SDK client."""
-        self.emit_score(score=TextScore(name=name, value=value), target=target)
+        self.emit_score(score=TextScore(name=name, value=value), target=_score_target(run_id=run_id, trace_id=trace_id, target=target))
 
     def score_current_trace[TValue: ScoreValue](self, *, score: Score[TValue]) -> None:
         """Attach a typed score to the trace active in this telemetry client."""
@@ -284,6 +330,38 @@ class LangfuseTelemetry:
     def score_current_span[TValue: ScoreValue](self, *, score: Score[TValue]) -> None:
         """Attach a typed score to the active span or generation in this telemetry client."""
         score_current_span(self.client, score=score)
+
+    def score_current_trace_numeric(self, name: str, value: float) -> None:
+        """Attach a numeric score to the active trace."""
+        self.score_current_trace(score=NumericScore(name=name, value=value))
+
+    def score_current_trace_categorical(self, name: str, value: str) -> None:
+        """Attach a categorical score to the active trace."""
+        self.score_current_trace(score=CategoricalScore(name=name, value=value))
+
+    def score_current_trace_boolean(self, name: str, value: bool) -> None:
+        """Attach a boolean score to the active trace."""
+        self.score_current_trace(score=BooleanScore(name=name, value=value))
+
+    def score_current_trace_text(self, name: str, value: str) -> None:
+        """Attach a text score to the active trace."""
+        self.score_current_trace(score=TextScore(name=name, value=value))
+
+    def score_current_span_numeric(self, name: str, value: float) -> None:
+        """Attach a numeric score to the active span or generation."""
+        self.score_current_span(score=NumericScore(name=name, value=value))
+
+    def score_current_span_categorical(self, name: str, value: str) -> None:
+        """Attach a categorical score to the active span or generation."""
+        self.score_current_span(score=CategoricalScore(name=name, value=value))
+
+    def score_current_span_boolean(self, name: str, value: bool) -> None:
+        """Attach a boolean score to the active span or generation."""
+        self.score_current_span(score=BooleanScore(name=name, value=value))
+
+    def score_current_span_text(self, name: str, value: str) -> None:
+        """Attach a text score to the active span or generation."""
+        self.score_current_span(score=TextScore(name=name, value=value))
 
     @staticmethod
     def deterministic_trace_id(seed: str) -> str:

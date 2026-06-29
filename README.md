@@ -55,6 +55,13 @@ with score_elapsed(
     call_provider()
 ```
 
+Emit common run and current-trace scores through the telemetry owner without manually building score objects:
+
+```python
+telemetry.emit_numeric_score("provider_call_elapsed_seconds", 1.42, run_id=run_id, trace_id=trace_id)
+telemetry.score_current_trace_categorical("routing_decision", "escalated")
+```
+
 Collect provider/client-only OpenTelemetry span timings:
 
 ```python
