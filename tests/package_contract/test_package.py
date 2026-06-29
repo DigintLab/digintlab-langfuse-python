@@ -354,6 +354,41 @@ def test_langchain_callbacks_uses_proxy_callbacks_in_proxy_mode() -> None:
     assert callbacks == [cache_callback, tool_callback]
 
 
+def test_telemetry_exposes_bound_runtime_helpers() -> None:
+    client = MagicMock()
+    telemetry = LangfuseTelemetry(client, public_key="pk-test", instrument_httpx=False, instrument_botocore=False)
+
+    callback = telemetry.tool_span_callback()
+    assert isinstance(callback, ToolSpanCallback)
+
+    with patch("digintlab_langfuse.client.current_langfuse_trace_id", return_value="trace-1") as current_trace_id:
+        assert telemetry.current_trace_id() == "trace-1"
+
+    current_trace_id.assert_called_once_with(client)
+
+    with patch("digintlab_langfuse.client.observe_node_span") as node_span:
+        telemetry.observe_node_span("graph_node", enabled=True, kind=ObservationKind.AGENT)
+
+    node_span.assert_called_once()
+    assert node_span.call_args.kwargs["enabled"] is True
+    assert node_span.call_args.kwargs["kind"] is ObservationKind.AGENT
+    assert node_span.call_args.kwargs["client_getter"]() is client
+
+    with patch("digintlab_langfuse.client.emit_langfuse_guardrail_observation") as guardrail:
+        telemetry.emit_guardrail_observation("blocked", output={"ok": False}, observation_input={"call": 1}, status_message="blocked")
+
+    guardrail.assert_called_once()
+    assert guardrail.call_args.kwargs["output"] == {"ok": False}
+    assert guardrail.call_args.kwargs["observation_input"] == {"call": 1}
+    assert guardrail.call_args.kwargs["client_getter"]() is client
+
+    with patch("digintlab_langfuse.client.with_langfuse_trace_metadata", return_value={"metadata": {"trace_id": "trace-1"}}) as trace_metadata:
+        assert telemetry.with_litellm_trace_metadata({"model": "anthropic/claude"}) == {"metadata": {"trace_id": "trace-1"}}
+
+    trace_metadata.assert_called_once()
+    assert trace_metadata.call_args.kwargs["client_getter"]() is client
+
+
 def test_trace_call_adds_attributes_and_optional_root_observation() -> None:
     client = MagicMock()
     root_observation = MagicMock()

@@ -62,6 +62,15 @@ telemetry.emit_numeric_score("provider_call_elapsed_seconds", 1.42, run_id=run_i
 telemetry.score_current_trace_categorical("routing_decision", "escalated")
 ```
 
+Use bound runtime helpers when an application owns one telemetry object:
+
+```python
+tool_callback = telemetry.tool_span_callback(summarize_output=summarize_tool_output)
+with telemetry.observe_node_span("correlate", enabled=True):
+    run_node()
+kwargs = telemetry.with_litellm_trace_metadata(kwargs)
+```
+
 Collect provider/client-only OpenTelemetry span timings:
 
 ```python

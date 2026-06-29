@@ -7,7 +7,7 @@ starts or stops optional `httpx` and `botocore` OpenTelemetry instrumentors.
 import asyncio
 import os
 from collections.abc import Callable, Iterator, Sequence
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from typing import TypedDict
 
@@ -21,6 +21,8 @@ from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SpanExporter
 
+from digintlab_langfuse.callbacks import ToolObservationResult, ToolSpanCallback
+from digintlab_langfuse.litellm import with_langfuse_trace_metadata
 from digintlab_langfuse.scores import (
     DEFAULT_SCORE_TARGET,
     BooleanScore,
@@ -34,7 +36,17 @@ from digintlab_langfuse.scores import (
     score_current_span,
     score_current_trace,
 )
-from digintlab_langfuse.spans import ObservationKind, scrub_auth_header
+from digintlab_langfuse.spans import (
+    ObservationKind,
+    observe_node_span,
+    scrub_auth_header,
+)
+from digintlab_langfuse.spans import (
+    current_trace_id as current_langfuse_trace_id,
+)
+from digintlab_langfuse.spans import (
+    emit_guardrail_observation as emit_langfuse_guardrail_observation,
+)
 from digintlab_langfuse.types import JsonValue, to_json_value
 
 LANGFUSE_DEFAULT_BASE_URL = "https://cloud.langfuse.com"
@@ -203,6 +215,58 @@ class LangfuseTelemetry:
         if proxy_mode:
             return [*callbacks, *proxy_callbacks]
         return [self._langchain_handler, *callbacks]
+
+    def tool_span_callback(
+        self,
+        *,
+        summarize_output: Callable[[object], ToolObservationResult] | None = None,
+        json_value_converter: Callable[[object], JsonValue] = to_json_value,
+    ) -> ToolSpanCallback:
+        """Return a LangChain callback that writes tool observations with this client's trace context."""
+        return ToolSpanCallback(
+            summarize_output=summarize_output,
+            client_getter=lambda: self.client,
+            json_value_converter=json_value_converter,
+        )
+
+    def observe_node_span(
+        self,
+        name: str,
+        *,
+        enabled: bool,
+        kind: ObservationKind = ObservationKind.SPAN,
+    ) -> AbstractContextManager[None]:
+        """Open a node observation with this telemetry client's active trace context."""
+        return observe_node_span(name, enabled=enabled, kind=kind, client_getter=lambda: self.client)
+
+    def current_trace_id(self) -> str | None:
+        """Return this telemetry client's active trace id."""
+        return current_langfuse_trace_id(self.client)
+
+    def emit_guardrail_observation(
+        self,
+        name: str,
+        *,
+        output: JsonValue,
+        observation_input: JsonValue = None,
+        status_message: str = "",
+    ) -> None:
+        """Emit a guardrail observation with this telemetry client's active trace context."""
+        emit_langfuse_guardrail_observation(
+            name,
+            observation_input=observation_input,
+            output=output,
+            status_message=status_message,
+            client_getter=lambda: self.client,
+        )
+
+    def with_litellm_trace_metadata(
+        self,
+        kwargs: dict[str, JsonValue],
+        run_manager: object | None = None,
+    ) -> dict[str, JsonValue]:
+        """Attach this telemetry client's active trace metadata to LiteLLM-compatible kwargs."""
+        return with_langfuse_trace_metadata(kwargs, run_manager, client_getter=lambda: self.client)
 
     @contextmanager
     def trace_call(
