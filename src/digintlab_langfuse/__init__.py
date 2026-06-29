@@ -50,6 +50,7 @@ from digintlab_langfuse.scores import (
     score_current_trace_text,
 )
 from digintlab_langfuse.spans import observe_generation
+from digintlab_langfuse.timing import SpanTimingBucket, SpanTimingProcessor, elapsed_timer
 
 __all__ = [
     "LANGFUSE_DEFAULT_BASE_URL",
@@ -68,12 +69,15 @@ __all__ = [
     "Score",
     "ScoreDataType",
     "ScoreTarget",
+    "SpanTimingBucket",
+    "SpanTimingProcessor",
     "TextManagedPrompt",
     "TextPromptRequest",
     "TextScore",
     "create_dataset",
     "create_dataset_item",
     "create_or_update_prompt",
+    "elapsed_timer",
     "emit_boolean_score",
     "emit_categorical_score",
     "emit_numeric_score",
