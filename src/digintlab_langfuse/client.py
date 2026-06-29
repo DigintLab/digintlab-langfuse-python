@@ -21,6 +21,19 @@ from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SpanExporter
 
+from digintlab_langfuse.scores import (
+    DEFAULT_SCORE_TARGET,
+    BooleanScore,
+    CategoricalScore,
+    NumericScore,
+    Score,
+    ScoreTarget,
+    ScoreValue,
+    TextScore,
+    emit_score,
+    score_current_span,
+    score_current_trace,
+)
 from digintlab_langfuse.spans import ObservationKind, scrub_auth_header
 from digintlab_langfuse.types import JsonValue, to_json_value
 
@@ -238,6 +251,39 @@ class LangfuseTelemetry:
     def trace_url(self, *, trace_id: str | None = None) -> str | None:
         """Return a Langfuse trace URL for the active or provided trace id."""
         return self.client.get_trace_url(trace_id=trace_id)
+
+    def emit_score[TValue: ScoreValue](
+        self,
+        *,
+        score: Score[TValue],
+        target: ScoreTarget = DEFAULT_SCORE_TARGET,
+    ) -> None:
+        """Emit a typed Langfuse score with this telemetry client's SDK client."""
+        emit_score(self.client, score=score, target=target)
+
+    def emit_numeric_score(self, name: str, value: float, *, target: ScoreTarget = DEFAULT_SCORE_TARGET) -> None:
+        """Emit a numeric Langfuse score with this telemetry client's SDK client."""
+        self.emit_score(score=NumericScore(name=name, value=value), target=target)
+
+    def emit_categorical_score(self, name: str, value: str, *, target: ScoreTarget = DEFAULT_SCORE_TARGET) -> None:
+        """Emit a categorical Langfuse score with this telemetry client's SDK client."""
+        self.emit_score(score=CategoricalScore(name=name, value=value), target=target)
+
+    def emit_boolean_score(self, name: str, value: bool, *, target: ScoreTarget = DEFAULT_SCORE_TARGET) -> None:
+        """Emit a boolean Langfuse score with this telemetry client's SDK client."""
+        self.emit_score(score=BooleanScore(name=name, value=value), target=target)
+
+    def emit_text_score(self, name: str, value: str, *, target: ScoreTarget = DEFAULT_SCORE_TARGET) -> None:
+        """Emit a text Langfuse score with this telemetry client's SDK client."""
+        self.emit_score(score=TextScore(name=name, value=value), target=target)
+
+    def score_current_trace[TValue: ScoreValue](self, *, score: Score[TValue]) -> None:
+        """Attach a typed score to the trace active in this telemetry client."""
+        score_current_trace(self.client, score=score)
+
+    def score_current_span[TValue: ScoreValue](self, *, score: Score[TValue]) -> None:
+        """Attach a typed score to the active span or generation in this telemetry client."""
+        score_current_span(self.client, score=score)
 
     @staticmethod
     def deterministic_trace_id(seed: str) -> str:
