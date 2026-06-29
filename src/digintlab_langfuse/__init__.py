@@ -1,5 +1,6 @@
 """Public Langfuse adapter API."""
 
+from digintlab_langfuse.callbacks import ToolObservationResult, ToolSpanCallback
 from digintlab_langfuse.client import (
     LANGFUSE_DEFAULT_BASE_URL,
     LangfuseClientConfig,
@@ -14,6 +15,7 @@ from digintlab_langfuse.experiments import (
     create_dataset_item,
     run_local_experiment,
 )
+from digintlab_langfuse.litellm import with_langfuse_trace_metadata
 from digintlab_langfuse.prompts import (
     ChatManagedPrompt,
     ChatPromptRequest,
@@ -40,17 +42,35 @@ from digintlab_langfuse.scores import (
     emit_numeric_score,
     emit_score,
     emit_text_score,
+    score_current_span,
     score_current_span_boolean,
     score_current_span_categorical,
     score_current_span_numeric,
     score_current_span_text,
+    score_current_trace,
     score_current_trace_boolean,
     score_current_trace_categorical,
     score_current_trace_numeric,
     score_current_trace_text,
+    score_elapsed,
 )
-from digintlab_langfuse.spans import observe_generation
-from digintlab_langfuse.timing import SpanTimingBucket, SpanTimingProcessor, elapsed_timer
+from digintlab_langfuse.spans import (
+    ObservationKind,
+    active_parent_observation_id,
+    current_trace_id,
+    emit_guardrail_observation,
+    observe_generation,
+    observe_node_span,
+)
+from digintlab_langfuse.timing import (
+    ElapsedTimer,
+    SpanTimingBucket,
+    SpanTimingProcessor,
+    SpanTimingRecorder,
+    create_span_timing_recorder,
+    default_span_timing_key,
+    elapsed_timer,
+)
 
 __all__ = [
     "LANGFUSE_DEFAULT_BASE_URL",
@@ -60,10 +80,12 @@ __all__ = [
     "ChatPromptRequest",
     "CorrectionScore",
     "DatasetConfig",
+    "ElapsedTimer",
     "LangfuseClientConfig",
     "LangfuseTelemetry",
     "ManagedPrompt",
     "NumericScore",
+    "ObservationKind",
     "PromptKind",
     "PromptRequest",
     "Score",
@@ -71,15 +93,23 @@ __all__ = [
     "ScoreTarget",
     "SpanTimingBucket",
     "SpanTimingProcessor",
+    "SpanTimingRecorder",
     "TextManagedPrompt",
     "TextPromptRequest",
     "TextScore",
+    "ToolObservationResult",
+    "ToolSpanCallback",
+    "active_parent_observation_id",
     "create_dataset",
     "create_dataset_item",
     "create_or_update_prompt",
+    "create_span_timing_recorder",
+    "current_trace_id",
+    "default_span_timing_key",
     "elapsed_timer",
     "emit_boolean_score",
     "emit_categorical_score",
+    "emit_guardrail_observation",
     "emit_numeric_score",
     "emit_score",
     "emit_text_score",
@@ -88,14 +118,19 @@ __all__ = [
     "init_langfuse_telemetry",
     "langchain_prompt_metadata",
     "observe_generation",
+    "observe_node_span",
     "run_local_experiment",
+    "score_current_span",
     "score_current_span_boolean",
     "score_current_span_categorical",
     "score_current_span_numeric",
     "score_current_span_text",
+    "score_current_trace",
     "score_current_trace_boolean",
     "score_current_trace_categorical",
     "score_current_trace_numeric",
     "score_current_trace_text",
+    "score_elapsed",
     "shutdown_langfuse_client",
+    "with_langfuse_trace_metadata",
 ]

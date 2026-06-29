@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from threading import Lock
 
 from opentelemetry import context as context_api
-from opentelemetry.sdk.trace import ReadableSpan, Span
+from opentelemetry.sdk.trace import ReadableSpan, Span, TracerProvider
 from opentelemetry.sdk.trace.export import SpanProcessor
 
 
@@ -59,7 +59,8 @@ def elapsed_timer() -> Iterator[ElapsedTimer]:
         timer.stop()
 
 
-def _default_timing_key(span: ReadableSpan) -> str:
+def default_span_timing_key(span: ReadableSpan) -> str:
+    """Return the default span timing bucket key for a completed span."""
     scope = span.instrumentation_scope
     return f"{scope.name}:{span.name}" if scope and scope.name else span.name
 
@@ -73,7 +74,7 @@ def _span_elapsed_seconds(span: ReadableSpan) -> float | None:
 class SpanTimingProcessor(SpanProcessor):
     """Collect elapsed-time buckets for ended OpenTelemetry spans."""
 
-    def __init__(self, *, key: Callable[[ReadableSpan], str] = _default_timing_key) -> None:
+    def __init__(self, *, key: Callable[[ReadableSpan], str] = default_span_timing_key) -> None:
         self._key = key
         self._buckets: dict[str, SpanTimingBucket] = {}
         self._lock = Lock()
@@ -127,3 +128,31 @@ class SpanTimingProcessor(SpanProcessor):
     def force_flush(self, _timeout_millis: int = 30_000) -> bool:
         """No buffered export work exists, so flushing always succeeds."""
         return True
+
+
+@dataclass(frozen=True, slots=True)
+class SpanTimingRecorder:
+    """Tracer provider plus timing processor installed on it."""
+
+    tracer_provider: TracerProvider
+    processor: SpanTimingProcessor
+
+    def snapshot(self, *, reset: bool = False) -> tuple[SpanTimingBucket, ...]:
+        """Return current timing buckets, optionally resetting accumulated timings."""
+        return self.processor.snapshot(reset=reset)
+
+    def reset(self) -> None:
+        """Clear accumulated timing buckets."""
+        self.processor.reset()
+
+
+def create_span_timing_recorder(
+    *,
+    key: Callable[[ReadableSpan], str] = default_span_timing_key,
+    tracer_provider: TracerProvider | None = None,
+) -> SpanTimingRecorder:
+    """Create or extend a tracer provider with a span timing processor."""
+    provider = tracer_provider or TracerProvider()
+    processor = SpanTimingProcessor(key=key)
+    provider.add_span_processor(processor)
+    return SpanTimingRecorder(tracer_provider=provider, processor=processor)

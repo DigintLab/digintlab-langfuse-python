@@ -39,6 +39,39 @@ This library is intentionally small:
 
 Prompt and experiment helpers exist for Langfuse workflows, but applications should expose them only when they have a real product use case.
 
+## Examples
+
+Emit a numeric elapsed-time score for a local operation:
+
+```python
+from digintlab_langfuse import ScoreTarget, score_elapsed
+
+with score_elapsed(
+    lf,
+    name="provider_call_elapsed_seconds",
+    target=ScoreTarget(run_id=run_id, trace_id=trace_id),
+    digits=2,
+):
+    call_provider()
+```
+
+Collect provider/client-only OpenTelemetry span timings:
+
+```python
+from digintlab_langfuse import LangfuseClientConfig, create_span_timing_recorder, init_langfuse_telemetry
+
+timing = create_span_timing_recorder()
+telemetry = init_langfuse_telemetry(
+    LangfuseClientConfig(
+        public_key=public_key,
+        secret_key=secret_key,
+        tracer_provider=timing.tracer_provider,
+    )
+)
+
+buckets = timing.snapshot(reset=True)
+```
+
 ## Validation
 
 CI runs formatting, linting, strict typing, and tests through `uv`.

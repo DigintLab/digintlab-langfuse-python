@@ -11,6 +11,7 @@ from langfuse.model import ChatPromptClient, TextPromptClient
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 
 import digintlab_langfuse
+from digintlab_langfuse.callbacks import ToolObservationResult, ToolSpanCallback
 from digintlab_langfuse.client import LangfuseClientConfig, LangfuseTelemetry, init_langfuse_client
 from digintlab_langfuse.experiments import (
     DatasetConfig,
@@ -18,6 +19,7 @@ from digintlab_langfuse.experiments import (
     create_dataset_item,
     run_local_experiment,
 )
+from digintlab_langfuse.litellm import with_langfuse_trace_metadata
 from digintlab_langfuse.prompts import (
     ChatPromptRequest,
     PromptKind,
@@ -25,9 +27,9 @@ from digintlab_langfuse.prompts import (
     create_or_update_prompt,
     get_prompt,
 )
-from digintlab_langfuse.scores import BooleanScore, NumericScore, ScoreTarget, emit_score
-from digintlab_langfuse.spans import observe_generation, scrub_auth_header
-from digintlab_langfuse.timing import SpanTimingProcessor, elapsed_timer
+from digintlab_langfuse.scores import BooleanScore, NumericScore, ScoreTarget, emit_score, score_elapsed
+from digintlab_langfuse.spans import ObservationKind, emit_guardrail_observation, observe_generation, observe_node_span, scrub_auth_header
+from digintlab_langfuse.timing import SpanTimingProcessor, create_span_timing_recorder, elapsed_timer
 from digintlab_langfuse.types import JsonValue
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[2] / "src" / "digintlab_langfuse"
@@ -36,9 +38,11 @@ EXPECTED_ROOT_EXPORTS = [
     "ChatManagedPrompt",
     "ChatPromptRequest",
     "DatasetConfig",
+    "ElapsedTimer",
     "LangfuseClientConfig",
     "LangfuseTelemetry",
     "ManagedPrompt",
+    "ObservationKind",
     "PromptKind",
     "PromptRequest",
     "BooleanScore",
@@ -50,14 +54,22 @@ EXPECTED_ROOT_EXPORTS = [
     "ScoreTarget",
     "SpanTimingBucket",
     "SpanTimingProcessor",
+    "SpanTimingRecorder",
     "TextManagedPrompt",
     "TextPromptRequest",
     "TextScore",
+    "ToolObservationResult",
+    "ToolSpanCallback",
+    "active_parent_observation_id",
     "create_dataset",
     "create_dataset_item",
     "create_or_update_prompt",
+    "create_span_timing_recorder",
+    "current_trace_id",
+    "default_span_timing_key",
     "emit_boolean_score",
     "emit_categorical_score",
+    "emit_guardrail_observation",
     "emit_numeric_score",
     "emit_score",
     "emit_text_score",
@@ -67,16 +79,21 @@ EXPECTED_ROOT_EXPORTS = [
     "init_langfuse_telemetry",
     "langchain_prompt_metadata",
     "observe_generation",
+    "observe_node_span",
     "run_local_experiment",
+    "score_current_span",
     "score_current_span_boolean",
     "score_current_span_categorical",
     "score_current_span_numeric",
     "score_current_span_text",
+    "score_current_trace",
     "score_current_trace_boolean",
     "score_current_trace_categorical",
     "score_current_trace_numeric",
     "score_current_trace_text",
+    "score_elapsed",
     "shutdown_langfuse_client",
+    "with_langfuse_trace_metadata",
 ]
 
 
@@ -97,6 +114,17 @@ def test_package_does_not_import_other_local_packages() -> None:
 
 def test_root_exports_only_public_library_surface() -> None:
     assert set(digintlab_langfuse.__all__) == set(EXPECTED_ROOT_EXPORTS)
+
+
+def test_root_reexports_observability_helpers() -> None:
+    assert digintlab_langfuse.ToolObservationResult is ToolObservationResult
+    assert digintlab_langfuse.ToolSpanCallback is ToolSpanCallback
+    assert digintlab_langfuse.ObservationKind is ObservationKind
+    assert digintlab_langfuse.emit_guardrail_observation is emit_guardrail_observation
+    assert digintlab_langfuse.observe_node_span is observe_node_span
+    assert digintlab_langfuse.with_langfuse_trace_metadata is with_langfuse_trace_metadata
+    assert digintlab_langfuse.create_span_timing_recorder is create_span_timing_recorder
+    assert digintlab_langfuse.score_elapsed is score_elapsed
 
 
 def test_client_config_forwards_langfuse_runtime_options() -> None:
@@ -202,6 +230,43 @@ def test_elapsed_timer_measures_local_block() -> None:
         assert timer.stop() == 0.5
 
 
+def test_score_elapsed_emits_numeric_score_after_success() -> None:
+    lf = MagicMock()
+
+    with (
+        patch("digintlab_langfuse.timing.time.monotonic", side_effect=[10.0, 10.129]),
+        score_elapsed(
+            lf,
+            name="operation_elapsed_seconds",
+            target=ScoreTarget(run_id="run-1", trace_id="trace-1"),
+            digits=2,
+        ),
+    ):
+        pass
+
+    lf.create_score.assert_called_once_with(
+        name="operation_elapsed_seconds",
+        value=0.13,
+        data_type="NUMERIC",
+        trace_id="trace-1",
+        metadata={"run_id": "run-1", "session_id": "run-1"},
+    )
+
+
+def test_score_elapsed_does_not_emit_score_when_body_raises() -> None:
+    lf = MagicMock()
+    message = "boom"
+
+    with (
+        patch("digintlab_langfuse.timing.time.monotonic", side_effect=[10.0, 10.5]),
+        pytest.raises(RuntimeError, match=message),
+        score_elapsed(lf, name="failed_elapsed_seconds"),
+    ):
+        raise RuntimeError(message)
+
+    lf.create_score.assert_not_called()
+
+
 def test_span_timing_processor_aggregates_ended_spans() -> None:
     processor = SpanTimingProcessor()
     provider = TracerProvider()
@@ -236,6 +301,32 @@ def test_span_timing_processor_accepts_custom_bucket_key() -> None:
         pass
 
     assert processor.snapshot()[0].key == "api.example"
+
+
+def test_span_timing_recorder_installs_processor_on_provider() -> None:
+    recorder = create_span_timing_recorder()
+    tracer = recorder.tracer_provider.get_tracer("package-test")
+
+    with tracer.start_as_current_span("provider.call"):
+        pass
+
+    buckets = recorder.snapshot(reset=True)
+
+    assert len(buckets) == 1
+    assert buckets[0].key == "package-test:provider.call"
+    assert buckets[0].count == 1
+    assert recorder.snapshot() == ()
+
+
+def test_span_timing_recorder_accepts_existing_provider_and_custom_key() -> None:
+    provider = TracerProvider()
+    recorder = create_span_timing_recorder(tracer_provider=provider, key=lambda span: span.name)
+
+    assert recorder.tracer_provider is provider
+    with provider.get_tracer("package-test").start_as_current_span("client.latency"):
+        pass
+
+    assert recorder.snapshot()[0].key == "client.latency"
 
 
 def test_langchain_callbacks_uses_sdk_handler_outside_proxy_mode() -> None:
@@ -719,6 +810,39 @@ def test_emit_score_supports_boolean_text_and_metadata() -> None:
         comment="passed",
         metadata={"run_id": "run-1", "session_id": "run-1", "suite": "smoke"},
     )
+
+
+def test_langfuse_telemetry_exposes_bound_score_helpers() -> None:
+    client = MagicMock()
+    telemetry = LangfuseTelemetry(client, public_key="pk-test", instrument_httpx=False, instrument_botocore=False)
+
+    telemetry.emit_numeric_score("latency_seconds", 1.25, target=ScoreTarget(run_id="run-1", trace_id="trace-1"))
+
+    client.create_score.assert_called_once_with(
+        name="latency_seconds",
+        value=1.25,
+        data_type="NUMERIC",
+        trace_id="trace-1",
+        metadata={"run_id": "run-1", "session_id": "run-1"},
+    )
+
+    client.reset_mock()
+    telemetry.emit_score(score=BooleanScore(name="policy_passed", value=False), target=ScoreTarget(run_id="run-2"))
+
+    client.create_score.assert_called_once_with(
+        name="policy_passed",
+        value=0.0,
+        data_type="BOOLEAN",
+        session_id="run-2",
+        metadata={"run_id": "run-2", "session_id": "run-2"},
+    )
+
+    client.reset_mock()
+    telemetry.score_current_trace(score=NumericScore(name="confidence", value=0.91))
+    telemetry.score_current_span(score=BooleanScore(name="valid", value=False))
+
+    client.score_current_trace.assert_called_once_with(name="confidence", value=0.91, data_type="NUMERIC")
+    client.score_current_span.assert_called_once_with(name="valid", value=0.0, data_type="BOOLEAN")
 
 
 def test_prompt_helpers_fetch_and_create_prompts() -> None:
