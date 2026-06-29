@@ -816,7 +816,7 @@ def test_langfuse_telemetry_exposes_bound_score_helpers() -> None:
     client = MagicMock()
     telemetry = LangfuseTelemetry(client, public_key="pk-test", instrument_httpx=False, instrument_botocore=False)
 
-    telemetry.emit_numeric_score("latency_seconds", 1.25, target=ScoreTarget(run_id="run-1", trace_id="trace-1"))
+    telemetry.emit_numeric_score("latency_seconds", 1.25, run_id="run-1", trace_id="trace-1")
 
     client.create_score.assert_called_once_with(
         name="latency_seconds",
@@ -838,11 +838,35 @@ def test_langfuse_telemetry_exposes_bound_score_helpers() -> None:
     )
 
     client.reset_mock()
-    telemetry.score_current_trace(score=NumericScore(name="confidence", value=0.91))
-    telemetry.score_current_span(score=BooleanScore(name="valid", value=False))
+    telemetry.score_current_trace_numeric("confidence", 0.91)
+    telemetry.score_current_span_boolean("valid", False)
 
     client.score_current_trace.assert_called_once_with(name="confidence", value=0.91, data_type="NUMERIC")
     client.score_current_span.assert_called_once_with(name="valid", value=0.0, data_type="BOOLEAN")
+
+
+def test_langfuse_telemetry_keeps_typed_score_escape_hatch() -> None:
+    client = MagicMock()
+    telemetry = LangfuseTelemetry(client, public_key="pk-test", instrument_httpx=False, instrument_botocore=False)
+
+    telemetry.emit_score(score=BooleanScore(name="policy_passed", value=False), target=ScoreTarget(run_id="run-2"))
+    telemetry.score_current_trace(score=NumericScore(name="confidence", value=0.91))
+
+    client.create_score.assert_called_once_with(
+        name="policy_passed",
+        value=0.0,
+        data_type="BOOLEAN",
+        session_id="run-2",
+        metadata={"run_id": "run-2", "session_id": "run-2"},
+    )
+    client.score_current_trace.assert_called_once_with(name="confidence", value=0.91, data_type="NUMERIC")
+
+
+def test_langfuse_telemetry_rejects_mixed_score_targets() -> None:
+    telemetry = LangfuseTelemetry(MagicMock(), public_key="pk-test", instrument_httpx=False, instrument_botocore=False)
+
+    with pytest.raises(ValueError, match="either target or run_id/trace_id"):
+        telemetry.emit_numeric_score("latency_seconds", 1.25, run_id="run-1", target=ScoreTarget(trace_id="trace-1"))
 
 
 def test_prompt_helpers_fetch_and_create_prompts() -> None:
