@@ -11,6 +11,7 @@ from langfuse.model import ChatPromptClient, TextPromptClient
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 
 import digintlab_langfuse
+from digintlab_langfuse.budgets import NumericBudgetViolation, check_numeric_budgets, validate_numeric_budget_ceilings
 from digintlab_langfuse.callbacks import ToolObservationResult, ToolSpanCallback
 from digintlab_langfuse.client import LangfuseClientConfig, LangfuseTelemetry, init_langfuse_client
 from digintlab_langfuse.experiments import (
@@ -42,6 +43,7 @@ EXPECTED_ROOT_EXPORTS = [
     "LangfuseClientConfig",
     "LangfuseTelemetry",
     "ManagedPrompt",
+    "NumericBudgetViolation",
     "ObservationKind",
     "PromptKind",
     "PromptRequest",
@@ -61,6 +63,7 @@ EXPECTED_ROOT_EXPORTS = [
     "ToolObservationResult",
     "ToolSpanCallback",
     "active_parent_observation_id",
+    "check_numeric_budgets",
     "create_dataset",
     "create_dataset_item",
     "create_or_update_prompt",
@@ -93,6 +96,7 @@ EXPECTED_ROOT_EXPORTS = [
     "score_current_trace_text",
     "score_elapsed",
     "shutdown_langfuse_client",
+    "validate_numeric_budget_ceilings",
     "with_langfuse_trace_metadata",
 ]
 
@@ -119,12 +123,39 @@ def test_root_exports_only_public_library_surface() -> None:
 def test_root_reexports_observability_helpers() -> None:
     assert digintlab_langfuse.ToolObservationResult is ToolObservationResult
     assert digintlab_langfuse.ToolSpanCallback is ToolSpanCallback
+    assert digintlab_langfuse.NumericBudgetViolation is NumericBudgetViolation
+    assert digintlab_langfuse.check_numeric_budgets is check_numeric_budgets
+    assert digintlab_langfuse.validate_numeric_budget_ceilings is validate_numeric_budget_ceilings
     assert digintlab_langfuse.ObservationKind is ObservationKind
     assert digintlab_langfuse.emit_guardrail_observation is emit_guardrail_observation
     assert digintlab_langfuse.observe_node_span is observe_node_span
     assert digintlab_langfuse.with_langfuse_trace_metadata is with_langfuse_trace_metadata
     assert digintlab_langfuse.create_span_timing_recorder is create_span_timing_recorder
     assert digintlab_langfuse.score_elapsed is score_elapsed
+
+
+def test_validate_numeric_budget_ceilings_rejects_unknown_names() -> None:
+    with pytest.raises(ValueError, match="Unknown budget ceiling names"):
+        validate_numeric_budget_ceilings({"known": 1, "typo": 2}, allowed_names={"known"})
+
+
+@pytest.mark.parametrize("value", [True, "1"])
+def test_validate_numeric_budget_ceilings_rejects_non_numeric_values(value: bool | str) -> None:
+    with pytest.raises(TypeError, match="must be a number"):
+        validate_numeric_budget_ceilings({"max_runtime": value})
+
+
+def test_check_numeric_budgets_reports_exceeded_and_missing_measurements() -> None:
+    violations = check_numeric_budgets(
+        {"latency_seconds": 12.5},
+        {"latency_seconds": 10.0, "cost_usd": 1.0},
+    )
+
+    assert violations == (
+        NumericBudgetViolation(name="latency_seconds", ceiling=10.0, observed=12.5),
+        NumericBudgetViolation(name="cost_usd", ceiling=1.0),
+    )
+    assert [violation.message for violation in violations] == ["12.5 > 10.0", "cost_usd missing"]
 
 
 def test_client_config_forwards_langfuse_runtime_options() -> None:
