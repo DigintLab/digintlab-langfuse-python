@@ -36,6 +36,7 @@ This library is intentionally small:
 - `digintlab_langfuse.litellm` forwards active Langfuse trace metadata into LiteLLM-compatible request kwargs.
 - `digintlab_langfuse.scores` provides typed score helpers for trace, observation, span, and session scores.
 - `digintlab_langfuse.timing` provides local elapsed timers and OpenTelemetry span timing aggregation.
+- `digintlab_langfuse.budgets` validates numeric ceilings and compares observed measurements to budget limits.
 
 Prompt and experiment helpers exist for Langfuse workflows, but applications should expose them only when they have a real product use case.
 
@@ -70,6 +71,15 @@ telemetry = init_langfuse_telemetry(
 )
 
 buckets = timing.snapshot(reset=True)
+```
+
+Check numeric runtime or cost budgets:
+
+```python
+from digintlab_langfuse import check_numeric_budgets, validate_numeric_budget_ceilings
+
+ceilings = validate_numeric_budget_ceilings({"latency_seconds": 10.0}, allowed_names={"latency_seconds"})
+violations = check_numeric_budgets({"latency_seconds": 12.5}, ceilings)
 ```
 
 ## Validation

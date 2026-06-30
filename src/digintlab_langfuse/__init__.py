@@ -1,5 +1,6 @@
 """Public Langfuse adapter API."""
 
+from digintlab_langfuse.budgets import NumericBudgetViolation, check_numeric_budgets, validate_numeric_budget_ceilings
 from digintlab_langfuse.callbacks import ToolObservationResult, ToolSpanCallback
 from digintlab_langfuse.client import (
     LANGFUSE_DEFAULT_BASE_URL,
@@ -84,6 +85,7 @@ __all__ = [
     "LangfuseClientConfig",
     "LangfuseTelemetry",
     "ManagedPrompt",
+    "NumericBudgetViolation",
     "NumericScore",
     "ObservationKind",
     "PromptKind",
@@ -100,6 +102,7 @@ __all__ = [
     "ToolObservationResult",
     "ToolSpanCallback",
     "active_parent_observation_id",
+    "check_numeric_budgets",
     "create_dataset",
     "create_dataset_item",
     "create_or_update_prompt",
@@ -132,5 +135,6 @@ __all__ = [
     "score_current_trace_text",
     "score_elapsed",
     "shutdown_langfuse_client",
+    "validate_numeric_budget_ceilings",
     "with_langfuse_trace_metadata",
 ]
