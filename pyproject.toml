@@ -5,11 +5,11 @@ description = "Typed Python helpers for Langfuse tracing, scoring, callbacks, an
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-  "botocore>=1.43.34",
+  "botocore>=1.43.36",
   "httpx>=0.28.1",
-  "langchain>=1.3.10",
+  "langchain>=1.3.11",
   "langchain-core>=1.4.8",
-  "langfuse>=4.9.1",
+  "langfuse>=4.11.0",
   "opentelemetry-api>=1.42.1",
   "opentelemetry-instrumentation-botocore>=0.63b1",
   "opentelemetry-instrumentation-httpx>=0.63b1",
