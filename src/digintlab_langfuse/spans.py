@@ -7,6 +7,7 @@ observations, return the current trace id, and redact credential fields from ins
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 
@@ -37,6 +38,40 @@ class ObservationKind(StrEnum):
     GUARDRAIL = "guardrail"
 
 
+@dataclass(frozen=True, slots=True)
+class TraceRuntimeContext:
+    """Portable Langfuse trace context for work that cannot rely on the active SDK context."""
+
+    trace_id: str
+    parent_observation_id: str | None = None
+    session_id: str | None = None
+    user_id: str | None = None
+    run_id: str | None = None
+    metadata: Mapping[str, JsonValue] | None = None
+
+    def as_trace_context(self) -> TraceContext:
+        """Return the SDK trace context representation."""
+        if self.parent_observation_id:
+            return TraceContext(trace_id=self.trace_id, parent_span_id=self.parent_observation_id)
+        return TraceContext(trace_id=self.trace_id)
+
+    def as_litellm_metadata(self) -> dict[str, str]:
+        """Return string metadata suitable for LiteLLM/OpenAI-compatible forwarding."""
+        metadata = {str(key): str(value) for key, value in (self.metadata or {}).items() if value is not None}
+        metadata["existing_trace_id"] = self.trace_id
+        metadata["trace_id"] = self.trace_id
+        if self.run_id:
+            metadata["run_id"] = self.run_id
+            metadata.setdefault("session_id", self.run_id)
+        if self.session_id:
+            metadata["session_id"] = self.session_id
+        if self.user_id:
+            metadata["user_id"] = self.user_id
+        if self.parent_observation_id:
+            metadata["parent_observation_id"] = self.parent_observation_id
+        return metadata
+
+
 def active_parent_observation_id() -> str | None:
     """Return the most recently pushed Langfuse observation id."""
     stack = _active_parent_observation_ids.get()
@@ -47,6 +82,31 @@ def current_trace_id(client: Langfuse) -> str | None:
     """Return the active Langfuse trace id, or None when no trace is active."""
     trace_id = client.get_current_trace_id()
     return trace_id if isinstance(trace_id, str) and trace_id else None
+
+
+def trace_runtime_context(
+    client: Langfuse,
+    *,
+    session_id: str | None = None,
+    user_id: str | None = None,
+    run_id: str | None = None,
+    metadata: Mapping[str, JsonValue] | None = None,
+) -> TraceRuntimeContext | None:
+    """Capture the active Langfuse trace and parent observation as a portable runtime context."""
+    trace_id = current_trace_id(client)
+    if trace_id is None:
+        return None
+
+    raw_current_observation_id = client.get_current_observation_id()
+    current_observation_id = raw_current_observation_id if isinstance(raw_current_observation_id, str) and raw_current_observation_id else None
+    return TraceRuntimeContext(
+        trace_id=trace_id,
+        parent_observation_id=active_parent_observation_id() or current_observation_id,
+        session_id=session_id,
+        user_id=user_id,
+        run_id=run_id,
+        metadata=metadata,
+    )
 
 
 def _push_active_parent(span_id: str) -> None:

@@ -4,6 +4,16 @@ version = "0.1.0"
 description = "Typed Python helpers for Langfuse tracing, scoring, callbacks, and LiteLLM metadata in DigIntLab agent runtimes."
 readme = "README.md"
 requires-python = ">=3.13"
+license = { text = "Proprietary" }
+authors = [{ name = "DigIntLab" }]
+keywords = ["langfuse", "langchain", "litellm", "opentelemetry", "observability"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.13",
+  "Typing :: Typed",
+]
 dependencies = [
   "botocore>=1.43.36",
   "httpx>=0.28.1",
@@ -15,6 +25,9 @@ dependencies = [
   "opentelemetry-instrumentation-httpx>=0.63b1",
   "opentelemetry-sdk>=1.42.1",
 ]
+
+[project.urls]
+Repository = "https://github.com/DigintLab/digintlab-langfuse-python"
 
 [dependency-groups]
 dev = [
