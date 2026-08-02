@@ -1026,6 +1026,21 @@ def test_tool_span_callback_emits_default_tool_observation() -> None:
     tool_span.end.assert_called_once()
 
 
+def test_tool_span_callback_does_not_create_a_logical_root_without_a_parent() -> None:
+    from uuid import uuid4
+
+    from digintlab_langfuse.callbacks import ToolSpanCallback
+
+    mock_lf = MagicMock()
+    mock_lf.get_current_trace_id.return_value = "trace-123"
+    mock_lf.get_current_observation_id.return_value = None
+    callback = ToolSpanCallback(client_getter=lambda: mock_lf)
+
+    callback.on_tool_start({"name": "query_ngsiem"}, "{}", run_id=uuid4())
+
+    mock_lf.start_observation.assert_not_called()
+
+
 def test_tool_span_callback_marks_tool_error_event() -> None:
     from uuid import uuid4
 
@@ -1035,6 +1050,7 @@ def test_tool_span_callback_marks_tool_error_event() -> None:
     tool_span.id = "tool-span-123"
     mock_lf = MagicMock()
     mock_lf.get_current_trace_id.return_value = "trace-123"
+    mock_lf.get_current_observation_id.return_value = "parent-span"
     mock_lf.start_observation.return_value = tool_span
 
     run_id = uuid4()
@@ -1055,6 +1071,7 @@ def test_tool_span_callback_logs_start_failure() -> None:
 
     mock_lf = MagicMock()
     mock_lf.get_current_trace_id.return_value = "trace-123"
+    mock_lf.get_current_observation_id.return_value = "parent-span"
     mock_lf.start_observation.side_effect = RuntimeError("telemetry start failed")
     callback = ToolSpanCallback(client_getter=lambda: mock_lf)
 
@@ -1087,6 +1104,7 @@ def test_tool_span_callback_logs_update_and_end_failures() -> None:
     tool_span.end.side_effect = RuntimeError("telemetry end failed")
     mock_lf = MagicMock()
     mock_lf.get_current_trace_id.return_value = "trace-123"
+    mock_lf.get_current_observation_id.return_value = "parent-span"
     mock_lf.start_observation.return_value = tool_span
     callback = ToolSpanCallback(client_getter=lambda: mock_lf)
     run_id = uuid4()
