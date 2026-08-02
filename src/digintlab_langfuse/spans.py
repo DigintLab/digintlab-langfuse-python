@@ -1,27 +1,52 @@
-"""Langfuse observation helpers backed by a context-local parent stack.
+"""Langfuse observation helpers backed by context-local active-parent state.
 
-`observe_node_span()` opens observations and pushes their ids into `_active_parent_observation_ids`. Other helpers read that id, emit guardrail
+`observe_node_span()` opens observations and keeps their handles in context-local active-parent state. Other helpers read that state, emit guardrail
 observations, return the current trace id, and redact credential fields from instrumented HTTP spans.
 """
 
+import logging
 from collections.abc import Callable, Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 
 import httpx
-from langfuse import Langfuse, LangfuseGeneration, get_client
+from langfuse import (
+    Langfuse,
+    LangfuseAgent,
+    LangfuseChain,
+    LangfuseEmbedding,
+    LangfuseEvaluator,
+    LangfuseGeneration,
+    LangfuseGuardrail,
+    LangfuseRetriever,
+    LangfuseSpan,
+    LangfuseTool,
+    get_client,
+)
 from langfuse.api.commons.types import ObservationLevel
 from langfuse.model import ChatPromptClient, TextPromptClient
 from langfuse.types import TraceContext
 from opentelemetry.trace import Span
 
+from digintlab_langfuse._reliability import fail_open_context
 from digintlab_langfuse.types import JsonValue, to_json_value
 
 OBSERVATION_STATUS_MESSAGE_MAX_CHARS = 200
-_active_parent_observation_ids: ContextVar[tuple[str, ...]] = ContextVar("active_langfuse_parent_observation_ids", default=())
+logger = logging.getLogger(__name__)
+type _NodeObservation = (
+    LangfuseSpan
+    | LangfuseGeneration
+    | LangfuseEmbedding
+    | LangfuseAgent
+    | LangfuseTool
+    | LangfuseChain
+    | LangfuseRetriever
+    | LangfuseEvaluator
+    | LangfuseGuardrail
+)
 
 
 class ObservationKind(StrEnum):
@@ -36,6 +61,19 @@ class ObservationKind(StrEnum):
     RETRIEVER = "retriever"
     EVALUATOR = "evaluator"
     GUARDRAIL = "guardrail"
+
+
+@dataclass(slots=True)
+class _ActiveParentObservation:
+    client: Langfuse
+    observation: _NodeObservation
+    active: bool = True
+
+
+_active_parent_observation_context: ContextVar[_ActiveParentObservation | None] = ContextVar(
+    "active_langfuse_parent_observation",
+    default=None,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,8 +112,11 @@ class TraceRuntimeContext:
 
 def active_parent_observation_id() -> str | None:
     """Return the most recently pushed Langfuse observation id."""
-    stack = _active_parent_observation_ids.get()
-    return stack[-1] if stack else None
+    parent = _active_parent_observation()
+    if parent is None:
+        return None
+    observation_id = parent.observation.id
+    return observation_id if isinstance(observation_id, str) and observation_id else None
 
 
 def current_trace_id(client: Langfuse) -> str | None:
@@ -109,18 +150,38 @@ def trace_runtime_context(
     )
 
 
-def _push_active_parent(span_id: str) -> None:
-    _active_parent_observation_ids.set((*_active_parent_observation_ids.get(), span_id))
+def _active_parent_observation() -> _ActiveParentObservation | None:
+    parent = _active_parent_observation_context.get()
+    return parent if parent is not None and parent.active else None
 
 
-def _pop_active_parent(span_id: str) -> None:
-    stack = _active_parent_observation_ids.get()
-    if not stack:
-        return
-    if stack[-1] == span_id:
-        _active_parent_observation_ids.set(stack[:-1])
-        return
-    _active_parent_observation_ids.set(tuple(item for item in stack if item != span_id))
+def _start_current_node_observation(
+    client: Langfuse,
+    *,
+    name: str,
+    kind: ObservationKind,
+) -> AbstractContextManager[_NodeObservation]:
+    observation_context: AbstractContextManager[_NodeObservation]
+    match kind:
+        case ObservationKind.GENERATION:
+            observation_context = client.start_as_current_observation(name=name, as_type="generation")
+        case ObservationKind.EMBEDDING:
+            observation_context = client.start_as_current_observation(name=name, as_type="embedding")
+        case ObservationKind.SPAN:
+            observation_context = client.start_as_current_observation(name=name, as_type="span")
+        case ObservationKind.AGENT:
+            observation_context = client.start_as_current_observation(name=name, as_type="agent")
+        case ObservationKind.TOOL:
+            observation_context = client.start_as_current_observation(name=name, as_type="tool")
+        case ObservationKind.CHAIN:
+            observation_context = client.start_as_current_observation(name=name, as_type="chain")
+        case ObservationKind.RETRIEVER:
+            observation_context = client.start_as_current_observation(name=name, as_type="retriever")
+        case ObservationKind.EVALUATOR:
+            observation_context = client.start_as_current_observation(name=name, as_type="evaluator")
+        case ObservationKind.GUARDRAIL:
+            observation_context = client.start_as_current_observation(name=name, as_type="guardrail")
+    return observation_context
 
 
 @contextmanager
@@ -140,21 +201,38 @@ def observe_node_span(
         yield
         return
 
-    lf = (client_getter or get_client)()
-    if not lf.get_current_trace_id():
+    try:
+        lf = (client_getter or get_client)()
+        trace_id = current_trace_id(lf)
+    except Exception:
+        logger.exception("Failed to prepare Langfuse node observation")
+        yield
+        return
+    if not trace_id:
         yield
         return
 
-    span = lf.start_observation(name=name, as_type=kind.value)
-    _push_active_parent(span.id)
-    try:
-        yield
-    except BaseException as exc:
-        span.update(level=ObservationLevel.ERROR.value, status_message=str(exc)[:OBSERVATION_STATUS_MESSAGE_MAX_CHARS])
-        raise
-    finally:
-        _pop_active_parent(span.id)
-        span.end()
+    with fail_open_context(
+        lambda: _start_current_node_observation(lf, name=name, kind=kind),
+        logger=logger,
+        operation="Langfuse node observation lifecycle",
+    ) as span:
+        if span is None:
+            yield
+            return
+        parent = _ActiveParentObservation(client=lf, observation=span)
+        token = _active_parent_observation_context.set(parent)
+        try:
+            yield
+        except BaseException as exc:
+            try:
+                span.update(level=ObservationLevel.ERROR.value, status_message=str(exc)[:OBSERVATION_STATUS_MESSAGE_MAX_CHARS])
+            except Exception:
+                logger.exception("Failed to update Langfuse node observation after application error")
+            raise
+        finally:
+            parent.active = False
+            _active_parent_observation_context.reset(token)
 
 
 @contextmanager
@@ -179,30 +257,46 @@ def observe_generation(
         yield None
         return
 
-    lf = (client_getter or get_client)()
-    if not lf.get_current_trace_id():
+    try:
+        lf = (client_getter or get_client)()
+        trace_id = current_trace_id(lf)
+    except Exception:
+        logger.exception("Failed to prepare Langfuse generation observation")
+        yield None
+        return
+    if not trace_id:
         yield None
         return
 
     status = status_message[:OBSERVATION_STATUS_MESSAGE_MAX_CHARS] if status_message else None
-    with lf.start_as_current_observation(
-        name=name,
-        as_type=ObservationKind.GENERATION.value,
-        input=to_json_value(observation_input),
-        metadata=dict(metadata) if metadata is not None else None,
-        version=version,
-        level=level.value,
-        status_message=status,
-        completion_start_time=completion_start_time,
-        model=model,
-        usage_details=dict(usage_details) if usage_details is not None else None,
-        cost_details=dict(cost_details) if cost_details is not None else None,
-        prompt=prompt,
+    with fail_open_context(
+        lambda: lf.start_as_current_observation(
+            name=name,
+            as_type=ObservationKind.GENERATION.value,
+            input=to_json_value(observation_input),
+            metadata=dict(metadata) if metadata is not None else None,
+            version=version,
+            level=level.value,
+            status_message=status,
+            completion_start_time=completion_start_time,
+            model=model,
+            usage_details=dict(usage_details) if usage_details is not None else None,
+            cost_details=dict(cost_details) if cost_details is not None else None,
+            prompt=prompt,
+        ),
+        logger=logger,
+        operation="Langfuse generation observation lifecycle",
     ) as generation:
+        if generation is None:
+            yield None
+            return
         try:
             yield generation
         except BaseException as exc:
-            generation.update(level=ObservationLevel.ERROR.value, status_message=str(exc)[:OBSERVATION_STATUS_MESSAGE_MAX_CHARS])
+            try:
+                generation.update(level=ObservationLevel.ERROR.value, status_message=str(exc)[:OBSERVATION_STATUS_MESSAGE_MAX_CHARS])
+            except Exception:
+                logger.exception("Failed to update Langfuse generation observation after application error")
             raise
 
 
@@ -219,35 +313,27 @@ def emit_guardrail_observation(
 
     The function returns without emitting when there is no active parent observation or no current trace id.
     """
-    parent_id = active_parent_observation_id()
-    if not parent_id:
-        return
+    try:
+        parent = _active_parent_observation()
+        if parent is None:
+            return
 
-    lf = (client_getter or get_client)()
-    trace_id = current_trace_id(lf)
-    if not trace_id:
-        return
+        lf = (client_getter or get_client)()
+        if lf is not parent.client or current_trace_id(lf) is None:
+            return
 
-    if status_message:
-        span = lf.start_observation(
-            trace_context=TraceContext(trace_id=trace_id, parent_span_id=parent_id),
+        status = status_message[:OBSERVATION_STATUS_MESSAGE_MAX_CHARS] if status_message else None
+        span = parent.observation.start_observation(
             name=name,
             as_type=ObservationKind.GUARDRAIL.value,
             input=observation_input,
             output=output,
             level=level.value,
-            status_message=status_message[:OBSERVATION_STATUS_MESSAGE_MAX_CHARS],
+            status_message=status,
         )
-    else:
-        span = lf.start_observation(
-            trace_context=TraceContext(trace_id=trace_id, parent_span_id=parent_id),
-            name=name,
-            as_type=ObservationKind.GUARDRAIL.value,
-            input=observation_input,
-            output=output,
-            level=level.value,
-        )
-    span.end()
+        span.end()
+    except Exception:
+        logger.exception("Failed to emit Langfuse guardrail observation")
 
 
 def scrub_auth_header(span: Span, request: httpx.Request) -> None:

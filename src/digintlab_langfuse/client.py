@@ -5,6 +5,7 @@ starts or stops optional `httpx` and `botocore` OpenTelemetry instrumentors.
 """
 
 import asyncio
+import logging
 import os
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager
@@ -21,6 +22,7 @@ from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SpanExporter
 
+from digintlab_langfuse._reliability import fail_open_context
 from digintlab_langfuse.callbacks import ToolObservationResult, ToolSpanCallback
 from digintlab_langfuse.litellm import with_langfuse_trace_metadata
 from digintlab_langfuse.scores import (
@@ -50,6 +52,7 @@ from digintlab_langfuse.spans import (
 from digintlab_langfuse.types import JsonValue, to_json_value
 
 LANGFUSE_DEFAULT_BASE_URL = "https://cloud.langfuse.com"
+logger = logging.getLogger(__name__)
 
 
 def _score_target(
@@ -313,16 +316,24 @@ class LangfuseTelemetry:
                 yield
                 return
             if trace_context is None and root_input is None and root_metadata is None and version is None:
-                with self.client.start_as_current_observation(name=name, as_type=root_kind.value):
+                with fail_open_context(
+                    lambda: self.client.start_as_current_observation(name=name, as_type=root_kind.value),
+                    logger=logger,
+                    operation="Langfuse root observation lifecycle",
+                ):
                     yield
                 return
-            with self.client.start_as_current_observation(
-                trace_context=trace_context,
-                name=name,
-                as_type=root_kind.value,
-                input=to_json_value(root_input),
-                metadata=root_metadata,
-                version=version,
+            with fail_open_context(
+                lambda: self.client.start_as_current_observation(
+                    trace_context=trace_context,
+                    name=name,
+                    as_type=root_kind.value,
+                    input=to_json_value(root_input),
+                    metadata=root_metadata,
+                    version=version,
+                ),
+                logger=logger,
+                operation="Langfuse root observation lifecycle",
             ):
                 yield
 

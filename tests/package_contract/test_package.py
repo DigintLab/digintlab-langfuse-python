@@ -1,14 +1,17 @@
 """Standalone package contract tests for digintlab_langfuse."""
 
 import ast
+import asyncio
 from pathlib import Path
 from typing import assert_type
 from unittest.mock import MagicMock, patch
 
 import pytest
+from langfuse import Langfuse
 from langfuse.api.commons.types import ObservationLevel
 from langfuse.model import ChatPromptClient, TextPromptClient
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 import digintlab_langfuse
 from digintlab_langfuse.budgets import NumericBudgetViolation, check_numeric_budgets, validate_numeric_budget_ceilings
@@ -486,6 +489,42 @@ def test_trace_call_forwards_public_trace_options() -> None:
     }
 
 
+def test_trace_call_logs_root_start_failure_and_runs_body() -> None:
+    client = MagicMock()
+    observation_context = MagicMock()
+    observation_context.__enter__.side_effect = RuntimeError("telemetry start failed")
+    client.start_as_current_observation.return_value = observation_context
+    telemetry = LangfuseTelemetry(client, public_key="pk", instrument_httpx=False, instrument_botocore=False)
+    body_ran = False
+
+    with (
+        patch("digintlab_langfuse.client.propagate_attributes"),
+        patch("digintlab_langfuse.client.logger", create=True) as logger,
+        telemetry.trace_call(name="run", session_id="run-1", user_id="analyst", root_observation=True),
+    ):
+        body_ran = True
+
+    assert body_ran
+    logger.exception.assert_called_once()
+
+
+def test_trace_call_logs_root_end_failure_without_failing_body() -> None:
+    client = MagicMock()
+    observation_context = MagicMock()
+    observation_context.__exit__.side_effect = RuntimeError("telemetry end failed")
+    client.start_as_current_observation.return_value = observation_context
+    telemetry = LangfuseTelemetry(client, public_key="pk", instrument_httpx=False, instrument_botocore=False)
+
+    with (
+        patch("digintlab_langfuse.client.propagate_attributes"),
+        patch("digintlab_langfuse.client.logger", create=True) as logger,
+        telemetry.trace_call(name="run", session_id="run-1", user_id="analyst", root_observation=True),
+    ):
+        pass
+
+    logger.exception.assert_called_once()
+
+
 @pytest.mark.asyncio
 async def test_shutdown_stops_instrumentation_and_waits_for_sdk_shutdown() -> None:
     client = MagicMock()
@@ -512,6 +551,13 @@ async def test_shutdown_flushes_even_when_uninstrument_fails() -> None:
     client.shutdown.assert_called_once()
 
 
+def _current_observation_context(mock_lf: MagicMock, span: MagicMock) -> MagicMock:
+    context = MagicMock()
+    context.__enter__.return_value = span
+    mock_lf.start_as_current_observation.return_value = context
+    return context
+
+
 def test_observe_node_span_creates_span_for_graph_node() -> None:
     from digintlab_langfuse.spans import observe_node_span
 
@@ -519,13 +565,13 @@ def test_observe_node_span_creates_span_for_graph_node() -> None:
     mock_span.id = "span-123"
     mock_lf = MagicMock()
     mock_lf.get_current_trace_id.return_value = "trace-123"
-    mock_lf.start_observation.return_value = mock_span
+    context = _current_observation_context(mock_lf, mock_span)
 
     with patch("digintlab_langfuse.spans.get_client", return_value=mock_lf), observe_node_span("correlate", enabled=True):
         pass
 
-    mock_lf.start_observation.assert_called_once_with(name="correlate", as_type="span")
-    mock_span.end.assert_called_once()
+    mock_lf.start_as_current_observation.assert_called_once_with(name="correlate", as_type="span")
+    context.__exit__.assert_called_once()
 
 
 def test_observe_node_span_uses_explicit_kind() -> None:
@@ -535,7 +581,7 @@ def test_observe_node_span_uses_explicit_kind() -> None:
     mock_span.id = "span-123"
     mock_lf = MagicMock()
     mock_lf.get_current_trace_id.return_value = "trace-123"
-    mock_lf.start_observation.return_value = mock_span
+    _current_observation_context(mock_lf, mock_span)
 
     with (
         patch("digintlab_langfuse.spans.get_client", return_value=mock_lf),
@@ -547,7 +593,7 @@ def test_observe_node_span_uses_explicit_kind() -> None:
     ):
         pass
 
-    mock_lf.start_observation.assert_called_once_with(name="judge_validate", as_type="evaluator")
+    mock_lf.start_as_current_observation.assert_called_once_with(name="judge_validate", as_type="evaluator")
 
 
 def test_guardrail_observation_uses_active_node_as_parent() -> None:
@@ -559,7 +605,8 @@ def test_guardrail_observation_uses_active_node_as_parent() -> None:
     guardrail_span.id = "guardrail-span-123"
     mock_lf = MagicMock()
     mock_lf.get_current_trace_id.return_value = "trace-123"
-    mock_lf.start_observation.side_effect = [node_span, guardrail_span]
+    _current_observation_context(mock_lf, node_span)
+    node_span.start_observation.return_value = guardrail_span
 
     with patch("digintlab_langfuse.spans.get_client", return_value=mock_lf), observe_node_span("crowdstrike_agent", enabled=True):
         emit_guardrail_observation(
@@ -568,12 +615,62 @@ def test_guardrail_observation_uses_active_node_as_parent() -> None:
             status_message="Duplicate tool call blocked",
         )
 
-    guardrail_call = mock_lf.start_observation.call_args_list[1]
+    guardrail_call = node_span.start_observation.call_args
     assert guardrail_call.kwargs["name"] == "duplicate-tool-call"
     assert guardrail_call.kwargs["as_type"] == "guardrail"
-    assert guardrail_call.kwargs["trace_context"] == {"trace_id": "trace-123", "parent_span_id": "node-span-123"}
+    assert "trace_context" not in guardrail_call.kwargs
     assert guardrail_call.kwargs["output"]["blocked"] is True
+    mock_lf.start_observation.assert_not_called()
     guardrail_span.end.assert_called_once()
+
+
+def test_guardrail_observation_remains_child_of_node_inside_generation() -> None:
+    exporter = InMemorySpanExporter()
+    lf = Langfuse(public_key="pk-nested-guardrail-test", secret_key="sk-test", span_exporter=exporter)
+
+    try:
+        with (
+            lf.start_as_current_observation(name="root", as_type="agent"),
+            observe_node_span("node", enabled=True, client_getter=lambda: lf),
+        ):
+            node_id = lf.get_current_observation_id()
+            with observe_generation("generation", client_getter=lambda: lf):
+                emit_guardrail_observation("guardrail", output={"blocked": True}, client_getter=lambda: lf)
+
+        lf.flush()
+        guardrail = next(span for span in exporter.get_finished_spans() if span.name == "guardrail")
+
+        assert guardrail.parent is not None
+        assert f"{guardrail.parent.span_id:016x}" == node_id
+        assert guardrail.end_time is not None
+        assert "langfuse.internal.as_root" not in (guardrail.attributes or {})
+    finally:
+        lf.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_guardrail_observation_is_noop_after_node_closes_in_copied_context() -> None:
+    exporter = InMemorySpanExporter()
+    lf = Langfuse(public_key="pk-closed-node-guardrail-test", secret_key="sk-test", span_exporter=exporter)
+    release = asyncio.Event()
+
+    async def emit_after_release() -> None:
+        await release.wait()
+        emit_guardrail_observation("late-guardrail", output={"blocked": True}, client_getter=lambda: lf)
+
+    try:
+        with lf.start_as_current_observation(name="root", as_type="agent"):
+            with observe_node_span("node", enabled=True, client_getter=lambda: lf):
+                task = asyncio.create_task(emit_after_release())
+                await asyncio.sleep(0)
+
+            release.set()
+            await task
+
+        lf.flush()
+        assert all(span.name != "late-guardrail" for span in exporter.get_finished_spans())
+    finally:
+        lf.shutdown()
 
 
 def test_observe_node_span_disabled_is_noop() -> None:
@@ -584,7 +681,7 @@ def test_observe_node_span_disabled_is_noop() -> None:
     with patch("digintlab_langfuse.spans.get_client", return_value=mock_lf), observe_node_span("triage", enabled=False):
         pass
 
-    mock_lf.start_observation.assert_not_called()
+    mock_lf.start_as_current_observation.assert_not_called()
 
 
 def test_observe_node_span_without_active_trace_is_noop() -> None:
@@ -596,7 +693,19 @@ def test_observe_node_span_without_active_trace_is_noop() -> None:
     with patch("digintlab_langfuse.spans.get_client", return_value=mock_lf), observe_node_span("triage", enabled=True):
         pass
 
-    mock_lf.start_observation.assert_not_called()
+    mock_lf.start_as_current_observation.assert_not_called()
+
+
+def test_observe_node_span_with_malformed_trace_id_is_noop() -> None:
+    from digintlab_langfuse.spans import observe_node_span
+
+    mock_lf = MagicMock()
+    mock_lf.get_current_trace_id.return_value = 123
+
+    with observe_node_span("triage", enabled=True, client_getter=lambda: mock_lf):
+        pass
+
+    mock_lf.start_as_current_observation.assert_not_called()
 
 
 def test_observe_node_span_marks_error_level_on_exception() -> None:
@@ -606,7 +715,7 @@ def test_observe_node_span_marks_error_level_on_exception() -> None:
     mock_span.id = "span-123"
     mock_lf = MagicMock()
     mock_lf.get_current_trace_id.return_value = "trace-123"
-    mock_lf.start_observation.return_value = mock_span
+    context = _current_observation_context(mock_lf, mock_span)
     message = "boom"
 
     with (
@@ -618,7 +727,65 @@ def test_observe_node_span_marks_error_level_on_exception() -> None:
 
     mock_span.update.assert_called_once()
     assert mock_span.update.call_args.kwargs["level"] == "ERROR"
-    mock_span.end.assert_called_once()
+    context.__exit__.assert_called_once()
+
+
+def test_observe_node_span_logs_start_failure_and_runs_body() -> None:
+    mock_lf = MagicMock()
+    mock_lf.get_current_trace_id.return_value = "trace-123"
+    context = MagicMock()
+    context.__enter__.side_effect = RuntimeError("telemetry start failed")
+    mock_lf.start_as_current_observation.return_value = context
+    body_ran = False
+
+    with (
+        patch("digintlab_langfuse.spans.logger", create=True) as logger,
+        observe_node_span("plan", enabled=True, client_getter=lambda: mock_lf),
+    ):
+        body_ran = True
+
+    assert body_ran
+    logger.exception.assert_called_once()
+
+
+def test_observe_node_span_preserves_application_error_when_telemetry_fails() -> None:
+    message = "application failed"
+    mock_span = MagicMock()
+    mock_span.id = "span-123"
+    mock_span.update.side_effect = RuntimeError("telemetry update failed")
+    mock_lf = MagicMock()
+    mock_lf.get_current_trace_id.return_value = "trace-123"
+    context = _current_observation_context(mock_lf, mock_span)
+    context.__exit__.side_effect = RuntimeError("telemetry end failed")
+
+    with (
+        patch("digintlab_langfuse.spans.logger", create=True) as logger,
+        pytest.raises(ValueError, match=message),
+        observe_node_span("plan", enabled=True, client_getter=lambda: mock_lf),
+    ):
+        raise ValueError(message)
+
+    assert logger.exception.call_count == 2
+
+
+def test_guardrail_observation_logs_start_and_end_failures() -> None:
+    node_span = MagicMock()
+    node_span.id = "node-span-123"
+    guardrail_span = MagicMock()
+    guardrail_span.end.side_effect = RuntimeError("telemetry end failed")
+    node_span.start_observation.side_effect = [RuntimeError("telemetry start failed"), guardrail_span]
+    mock_lf = MagicMock()
+    mock_lf.get_current_trace_id.return_value = "trace-123"
+    _current_observation_context(mock_lf, node_span)
+
+    with (
+        patch("digintlab_langfuse.spans.logger", create=True) as logger,
+        observe_node_span("node", enabled=True, client_getter=lambda: mock_lf),
+    ):
+        emit_guardrail_observation("start-failure", output={}, client_getter=lambda: mock_lf)
+        emit_guardrail_observation("end-failure", output={}, client_getter=lambda: mock_lf)
+
+    assert logger.exception.call_count == 2
 
 
 def test_observe_node_span_sets_active_parent_observation_id_while_open() -> None:
@@ -628,12 +795,25 @@ def test_observe_node_span_sets_active_parent_observation_id_while_open() -> Non
     mock_span.id = "node-span-123"
     mock_lf = MagicMock()
     mock_lf.get_current_trace_id.return_value = "trace-123"
-    mock_lf.start_observation.return_value = mock_span
+    _current_observation_context(mock_lf, mock_span)
 
     with patch("digintlab_langfuse.spans.get_client", return_value=mock_lf), observe_node_span("crowdstrike_agent", enabled=True):
         assert active_parent_observation_id() == "node-span-123"
 
     assert active_parent_observation_id() is None
+
+
+def test_active_parent_observation_id_ignores_malformed_sdk_id() -> None:
+    from digintlab_langfuse.spans import active_parent_observation_id, observe_node_span
+
+    mock_span = MagicMock()
+    mock_span.id = 123
+    mock_lf = MagicMock()
+    mock_lf.get_current_trace_id.return_value = "trace-123"
+    _current_observation_context(mock_lf, mock_span)
+
+    with observe_node_span("node", enabled=True, client_getter=lambda: mock_lf):
+        assert active_parent_observation_id() is None
 
 
 @pytest.mark.asyncio
@@ -648,7 +828,7 @@ async def test_active_parent_observation_propagates_to_created_task() -> None:
     mock_lf = MagicMock()
     mock_lf.get_current_trace_id.return_value = "trace-123"
     mock_lf.get_current_observation_id.return_value = "root-span"
-    mock_lf.start_observation.return_value = mock_span
+    _current_observation_context(mock_lf, mock_span)
 
     async def child_metadata() -> dict[str, JsonValue]:
         result = with_langfuse_trace_metadata({})
@@ -679,6 +859,27 @@ def test_observe_generation_marks_observation_error_on_exception() -> None:
         raise RuntimeError(message)
 
     generation.update.assert_called_once_with(level=ObservationLevel.ERROR.value, status_message=message)
+
+
+def test_observe_generation_preserves_application_error_when_telemetry_fails() -> None:
+    message = "application failed"
+    lf = MagicMock()
+    lf.get_current_trace_id.return_value = "trace-1"
+    generation = MagicMock()
+    generation.update.side_effect = RuntimeError("telemetry update failed")
+    generation_context = MagicMock()
+    generation_context.__enter__.return_value = generation
+    generation_context.__exit__.side_effect = RuntimeError("telemetry end failed")
+    lf.start_as_current_observation.return_value = generation_context
+
+    with (
+        patch("digintlab_langfuse.spans.logger", create=True) as logger,
+        pytest.raises(ValueError, match=message),
+        observe_generation("llm", client_getter=lambda: lf),
+    ):
+        raise ValueError(message)
+
+    assert logger.exception.call_count == 2
 
 
 def _json_object(value: JsonValue) -> dict[str, JsonValue]:
@@ -846,6 +1047,55 @@ def test_tool_span_callback_marks_tool_error_event() -> None:
     assert kwargs["output"]["error"] == "RuntimeError"
     assert kwargs["level"] == "ERROR"
     assert kwargs["status_message"] == "RuntimeError: boom"
+    tool_span.end.assert_called_once()
+
+
+def test_tool_span_callback_logs_start_failure() -> None:
+    from uuid import uuid4
+
+    mock_lf = MagicMock()
+    mock_lf.get_current_trace_id.return_value = "trace-123"
+    mock_lf.start_observation.side_effect = RuntimeError("telemetry start failed")
+    callback = ToolSpanCallback(client_getter=lambda: mock_lf)
+
+    with patch("digintlab_langfuse.callbacks.logger", create=True) as logger:
+        callback.on_tool_start({"name": "query"}, "{}", run_id=uuid4())
+
+    logger.exception.assert_called_once()
+
+
+def test_tool_span_callback_logs_current_observation_lookup_failure() -> None:
+    from uuid import uuid4
+
+    mock_lf = MagicMock()
+    mock_lf.get_current_trace_id.return_value = "trace-123"
+    mock_lf.get_current_observation_id.side_effect = RuntimeError("telemetry lookup failed")
+    callback = ToolSpanCallback(client_getter=lambda: mock_lf)
+
+    with patch("digintlab_langfuse.callbacks.logger", create=True) as logger:
+        callback.on_tool_start({"name": "query"}, "{}", run_id=uuid4())
+
+    logger.exception.assert_called_once()
+    mock_lf.start_observation.assert_not_called()
+
+
+def test_tool_span_callback_logs_update_and_end_failures() -> None:
+    from uuid import uuid4
+
+    tool_span = MagicMock()
+    tool_span.update.side_effect = RuntimeError("telemetry update failed")
+    tool_span.end.side_effect = RuntimeError("telemetry end failed")
+    mock_lf = MagicMock()
+    mock_lf.get_current_trace_id.return_value = "trace-123"
+    mock_lf.start_observation.return_value = tool_span
+    callback = ToolSpanCallback(client_getter=lambda: mock_lf)
+    run_id = uuid4()
+    callback.on_tool_start({"name": "query"}, "{}", run_id=run_id)
+
+    with patch("digintlab_langfuse.callbacks.logger", create=True) as logger:
+        callback.on_tool_end({"result": "ok"}, run_id=run_id)
+
+    assert logger.exception.call_count == 2
     tool_span.end.assert_called_once()
 
 

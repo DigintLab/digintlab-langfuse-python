@@ -40,6 +40,14 @@ This library is intentionally small:
 
 Prompt and experiment helpers exist for Langfuse workflows, but applications should expose them only when they have a real product use case.
 
+## Observation lifecycle
+
+`observe_node_span()` is a context manager, not a detached trace-link helper. When tracing is enabled and a trace is active, it opens the node with Langfuse `start_as_current_observation`; this makes the node the SDK-current parent for work executed inside the block and guarantees the node observation closes on normal or exceptional exit. When disabled or outside an active trace, it is a no-op.
+
+`emit_guardrail_observation()` emits only while an `observe_node_span()` scope is active. The package-local state retains the live node handle and a shared active flag: the helper starts the guardrail from that handle, making it a direct node child even if a generation is currently nested inside the node, and copied async contexts become inert after the node closes. It does not construct a detached `TraceContext`. The guardrail observation is explicitly ended before the function returns. Application-level root observations opened by `LangfuseTelemetry.trace_call()` are context-managed in the same way. When the SDK accepts the lifecycle calls, their root, node, and guardrail observations therefore all have an end time after those scopes exit.
+
+Runtime observation failures are fail-open: client lookup and observation start, update, or end errors are logged without replacing application results or exceptions. Initialization and instrumentation configuration remain fail-fast. If the SDK itself rejects an end call, the package cannot guarantee a server-side end time.
+
 ## Examples
 
 Emit a numeric elapsed-time score for a local operation:
@@ -68,6 +76,11 @@ Use bound runtime helpers when an application owns one telemetry object:
 ```python
 tool_callback = telemetry.tool_span_callback(summarize_output=summarize_tool_output)
 with telemetry.observe_node_span("correlate", enabled=True):
+    telemetry.emit_guardrail_observation(
+        "output_policy",
+        output={"allowed": True},
+        status_message="passed",
+    )
     run_node()
 kwargs = telemetry.with_litellm_trace_metadata(kwargs)
 ```
