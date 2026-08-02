@@ -69,7 +69,8 @@ def _tool_status_message(summary: ToolObservationResult) -> str:
 class ToolSpanCallback(BaseCallbackHandler):
     """Emit Langfuse tool observations under the active graph-node span.
 
-    `_spans` maps LangChain run ids to Langfuse observation wrappers. Start callbacks return without storing a span when there is no active trace.
+    `_spans` maps LangChain run ids to Langfuse observation wrappers. Start callbacks return without storing a span when there is no active
+    trace or parent observation; tool callbacks never create logical-root observations.
     """
 
     def __init__(
@@ -112,7 +113,9 @@ class ToolSpanCallback(BaseCallbackHandler):
             logger.exception("Failed to resolve the current Langfuse observation")
             return
         parent_id = active_parent_observation_id() or (current_observation_id if isinstance(current_observation_id, str) else None)
-        trace_context = TraceContext(trace_id=trace_id, parent_span_id=parent_id) if parent_id else TraceContext(trace_id=trace_id)
+        if not parent_id:
+            return
+        trace_context = TraceContext(trace_id=trace_id, parent_span_id=parent_id)
         tool_input: dict[str, JsonValue] = {"input": input_str}
         if inputs is not None:
             tool_input["inputs"] = self._json_value_converter(inputs)

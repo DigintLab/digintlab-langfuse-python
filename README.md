@@ -48,6 +48,8 @@ Prompt and experiment helpers exist for Langfuse workflows, but applications sho
 
 `emit_guardrail_observation()` emits only while an `observe_node_span()` scope is active. The package-local state retains the live node handle and a shared active flag: the helper starts the guardrail from that handle, making it a direct node child even if a generation is currently nested inside the node, and copied async contexts become inert after the node closes. It does not construct a detached `TraceContext`. The guardrail observation is explicitly ended before the function returns. Application-level root observations opened by `LangfuseTelemetry.trace_call()` are context-managed in the same way. When the SDK accepts the lifecycle calls, their root, node, and guardrail observations therefore all have an end time after those scopes exit.
 
+`ToolSpanCallback` also requires an active parent observation. It uses the retained node parent when available and otherwise the SDK-current observation, but it no-ops when both are absent. A trace id alone is deliberately insufficient because starting a tool from it creates a logical-root observation whose lifecycle is not owned by the callback's surrounding application scope.
+
 Runtime observation failures are fail-open: client lookup and observation start, update, or end errors are logged without replacing application results or exceptions. Initialization and instrumentation configuration remain fail-fast. If the SDK itself rejects an end call, the package cannot guarantee a server-side end time.
 
 ## Examples
