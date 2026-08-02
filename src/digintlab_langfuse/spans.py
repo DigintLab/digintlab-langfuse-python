@@ -111,7 +111,7 @@ class TraceRuntimeContext:
 
 
 def active_parent_observation_id() -> str | None:
-    """Return the most recently pushed Langfuse observation id."""
+    """Return the active node observation id, or None when it is unavailable."""
     parent = _active_parent_observation()
     if parent is None:
         return None
@@ -195,7 +195,7 @@ def observe_node_span(
     """Open a Langfuse observation for an application graph node.
 
     The context manager yields without opening an observation when disabled or when the client has no current trace id. Exceptions update the
-    observation level/status before being re-raised.
+    observation level/status before being re-raised. Telemetry lifecycle failures are logged and fail open.
     """
     if not enabled:
         yield
@@ -311,7 +311,8 @@ def emit_guardrail_observation(
 ) -> None:
     """Emit a short-lived guardrail observation under the active node.
 
-    The function returns without emitting when there is no active parent observation or no current trace id.
+    The function returns without emitting when there is no active parent observation or no current trace id. Telemetry lifecycle failures are logged
+    and fail open.
     """
     try:
         parent = _active_parent_observation()

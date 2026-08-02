@@ -6,6 +6,8 @@ The package keeps the reusable Langfuse integration logic outside application co
 
 ## Install
 
+Requires Python 3.13+ and Langfuse 4.x (`>=4.14.2,<5`).
+
 ```bash
 uv add digintlab-langfuse-python
 ```
@@ -42,7 +44,7 @@ Prompt and experiment helpers exist for Langfuse workflows, but applications sho
 
 ## Observation lifecycle
 
-`observe_node_span()` is a context manager, not a detached trace-link helper. When tracing is enabled and a trace is active, it opens the node with Langfuse `start_as_current_observation`; this makes the node the SDK-current parent for work executed inside the block and guarantees the node observation closes on normal or exceptional exit. When disabled or outside an active trace, it is a no-op.
+`observe_node_span()` is a context manager, not a detached trace-link helper. When tracing is enabled and a trace is active, it opens the node with Langfuse `start_as_current_observation`; this makes the node the SDK-current parent for work executed inside the block and requests closure of the node observation on normal or exceptional exit. When disabled or outside an active trace, it is a no-op.
 
 `emit_guardrail_observation()` emits only while an `observe_node_span()` scope is active. The package-local state retains the live node handle and a shared active flag: the helper starts the guardrail from that handle, making it a direct node child even if a generation is currently nested inside the node, and copied async contexts become inert after the node closes. It does not construct a detached `TraceContext`. The guardrail observation is explicitly ended before the function returns. Application-level root observations opened by `LangfuseTelemetry.trace_call()` are context-managed in the same way. When the SDK accepts the lifecycle calls, their root, node, and guardrail observations therefore all have an end time after those scopes exit.
 
