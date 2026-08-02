@@ -3,7 +3,7 @@
 from collections.abc import Mapping, Sequence
 from enum import Enum
 
-type JsonValue = str | int | float | bool | None | list[JsonValue] | dict[str, JsonValue]
+type JsonValue = str | int | float | bool | list[JsonValue] | dict[str, JsonValue] | None
 
 
 def to_json_value(value: object) -> JsonValue:
