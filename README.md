@@ -86,7 +86,7 @@ with telemetry.observe_node_span("correlate", enabled=True):
         status_message="passed",
     )
     run_node()
-kwargs = telemetry.with_litellm_trace_metadata(kwargs)
+kwargs = telemetry.with_litellm_proxy_trace_metadata(kwargs)
 ```
 
 Collect provider/client-only OpenTelemetry span timings:

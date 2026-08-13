@@ -1,8 +1,4 @@
-"""Helpers that add Langfuse trace fields to LiteLLM request kwargs.
-
-The functions read metadata from a LangChain run manager, merge caller-provided metadata, add current Langfuse trace and parent-observation ids, and
-copy the merged values into both `metadata` and `extra_body.metadata` when possible.
-"""
+"""Helpers that add Langfuse trace fields to LiteLLM proxy request kwargs."""
 
 from collections.abc import Callable
 from typing import Protocol
@@ -13,6 +9,7 @@ from digintlab_langfuse.spans import TraceRuntimeContext, active_parent_observat
 from digintlab_langfuse.types import JsonValue
 
 type LiteLLMParamValue = JsonValue
+LITELLM_EXTRA_BODY_TYPE_ERROR = "LiteLLM proxy extra_body must be a JSON object"
 
 
 class LangfuseTraceClient(Protocol):
@@ -33,21 +30,22 @@ def metadata_from_run_manager(run_manager: object | None) -> dict[str, str]:
     return {str(k): str(v) for k, v in metadata.items() if v is not None}
 
 
-def with_extra_body_metadata(kwargs: dict[str, LiteLLMParamValue], metadata: dict[str, str]) -> dict[str, LiteLLMParamValue]:
-    """Mirror trace metadata into both top-level and `extra_body.metadata` request fields."""
+def _with_proxy_metadata(kwargs: dict[str, LiteLLMParamValue], metadata: dict[str, str]) -> dict[str, LiteLLMParamValue]:
+    """Merge trace metadata into the proxy request's `extra_body.metadata`."""
     extra_body = kwargs.get("extra_body")
     metadata_value: dict[str, LiteLLMParamValue] = dict(metadata)
+    forwarded = {key: value for key, value in kwargs.items() if key != "metadata"}
     if extra_body is None:
-        return {**kwargs, "extra_body": {"metadata": metadata_value}}
+        return {**forwarded, "extra_body": {"metadata": metadata_value}}
     if not isinstance(extra_body, dict):
-        return {**kwargs, "extra_body": extra_body}
+        raise TypeError(LITELLM_EXTRA_BODY_TYPE_ERROR)
 
     extra_metadata = extra_body.get("metadata")
     merged_metadata: dict[str, LiteLLMParamValue] = {str(k): str(v) for k, v in extra_metadata.items()} if isinstance(extra_metadata, dict) else {}
     merged_metadata.update(metadata)
     merged_extra_body = {str(k): v for k, v in extra_body.items()}
     merged_extra_body["metadata"] = merged_metadata
-    return {**kwargs, "extra_body": merged_extra_body}
+    return {**forwarded, "extra_body": merged_extra_body}
 
 
 def _trace_context_from_client(
@@ -64,7 +62,7 @@ def _trace_context_from_client(
     return TraceRuntimeContext(trace_id=str(trace_id), parent_observation_id=parent_observation_id)
 
 
-def with_langfuse_trace_metadata(
+def with_litellm_proxy_trace_metadata(
     kwargs: dict[str, LiteLLMParamValue],
     run_manager: object | None = None,
     *,
@@ -72,9 +70,11 @@ def with_langfuse_trace_metadata(
     active_parent_getter: Callable[[], str | None] | None = None,
     trace_context: TraceRuntimeContext | None = None,
 ) -> dict[str, LiteLLMParamValue]:
-    """Add active Langfuse trace metadata to LiteLLM/OpenAI-compatible kwargs.
+    """Add active Langfuse trace metadata to LiteLLM proxy kwargs.
 
-    If no trace is active, the original kwargs are returned unchanged. Existing caller metadata is copied before trace fields are added.
+    If no trace is active, the original kwargs are returned unchanged. With an
+    active trace, caller metadata is merged into the proxy's
+    `extra_body.metadata` envelope before trace fields are added.
     """
     runtime_context = trace_context
     if runtime_context is None:
@@ -92,5 +92,4 @@ def with_langfuse_trace_metadata(
     if run_id:
         metadata.setdefault("session_id", run_id)
 
-    metadata_json: dict[str, LiteLLMParamValue] = dict(metadata)
-    return with_extra_body_metadata({**kwargs, "metadata": metadata_json}, metadata)
+    return _with_proxy_metadata(kwargs, metadata)

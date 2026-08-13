@@ -1,6 +1,6 @@
 """Trace runtime context tests."""
 
-from digintlab_langfuse.litellm import with_langfuse_trace_metadata
+from digintlab_langfuse.litellm import with_litellm_proxy_trace_metadata
 from digintlab_langfuse.spans import TraceRuntimeContext
 
 
@@ -13,9 +13,11 @@ def test_trace_runtime_context_exports_litellm_metadata() -> None:
         metadata={"tenant": "acme"},
     )
 
-    result = with_langfuse_trace_metadata({"metadata": {"request_id": "req-1"}}, trace_context=context)
+    result = with_litellm_proxy_trace_metadata({"metadata": {"request_id": "req-1"}}, trace_context=context)
 
-    raw_metadata = result["metadata"]
+    raw_extra_body = result["extra_body"]
+    assert isinstance(raw_extra_body, dict)
+    raw_metadata = raw_extra_body["metadata"]
     assert isinstance(raw_metadata, dict)
     metadata = {str(key): str(value) for key, value in raw_metadata.items()}
     assert metadata == {
