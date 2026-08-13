@@ -16,7 +16,7 @@ from digintlab_langfuse.experiments import (
     create_dataset_item,
     run_local_experiment,
 )
-from digintlab_langfuse.litellm import with_langfuse_trace_metadata
+from digintlab_langfuse.litellm import with_litellm_proxy_trace_metadata
 from digintlab_langfuse.prompts import (
     ChatManagedPrompt,
     ChatPromptRequest,
@@ -136,5 +136,5 @@ __all__ = [
     "score_elapsed",
     "shutdown_langfuse_client",
     "validate_numeric_budget_ceilings",
-    "with_langfuse_trace_metadata",
+    "with_litellm_proxy_trace_metadata",
 ]

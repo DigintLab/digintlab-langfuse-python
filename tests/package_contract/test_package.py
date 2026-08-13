@@ -23,7 +23,7 @@ from digintlab_langfuse.experiments import (
     create_dataset_item,
     run_local_experiment,
 )
-from digintlab_langfuse.litellm import with_langfuse_trace_metadata
+from digintlab_langfuse.litellm import with_litellm_proxy_trace_metadata
 from digintlab_langfuse.prompts import (
     ChatPromptRequest,
     PromptKind,
@@ -100,7 +100,7 @@ EXPECTED_ROOT_EXPORTS = [
     "score_elapsed",
     "shutdown_langfuse_client",
     "validate_numeric_budget_ceilings",
-    "with_langfuse_trace_metadata",
+    "with_litellm_proxy_trace_metadata",
 ]
 
 
@@ -132,7 +132,7 @@ def test_root_reexports_observability_helpers() -> None:
     assert digintlab_langfuse.ObservationKind is ObservationKind
     assert digintlab_langfuse.emit_guardrail_observation is emit_guardrail_observation
     assert digintlab_langfuse.observe_node_span is observe_node_span
-    assert digintlab_langfuse.with_langfuse_trace_metadata is with_langfuse_trace_metadata
+    assert digintlab_langfuse.with_litellm_proxy_trace_metadata is with_litellm_proxy_trace_metadata
     assert digintlab_langfuse.create_span_timing_recorder is create_span_timing_recorder
     assert digintlab_langfuse.score_elapsed is score_elapsed
 
@@ -416,8 +416,11 @@ def test_telemetry_exposes_bound_runtime_helpers() -> None:
     assert guardrail.call_args.kwargs["observation_input"] == {"call": 1}
     assert guardrail.call_args.kwargs["client_getter"]() is client
 
-    with patch("digintlab_langfuse.client.with_langfuse_trace_metadata", return_value={"metadata": {"trace_id": "trace-1"}}) as trace_metadata:
-        assert telemetry.with_litellm_trace_metadata({"model": "anthropic/claude"}) == {"metadata": {"trace_id": "trace-1"}}
+    with patch(
+        "digintlab_langfuse.client.with_litellm_proxy_trace_metadata",
+        return_value={"extra_body": {"metadata": {"trace_id": "trace-1"}}},
+    ) as trace_metadata:
+        assert telemetry.with_litellm_proxy_trace_metadata({"model": "anthropic/claude"}) == {"extra_body": {"metadata": {"trace_id": "trace-1"}}}
 
     trace_metadata.assert_called_once()
     assert trace_metadata.call_args.kwargs["client_getter"]() is client
@@ -820,7 +823,7 @@ def test_active_parent_observation_id_ignores_malformed_sdk_id() -> None:
 async def test_active_parent_observation_propagates_to_created_task() -> None:
     import asyncio
 
-    from digintlab_langfuse.litellm import with_langfuse_trace_metadata
+    from digintlab_langfuse.litellm import with_litellm_proxy_trace_metadata
     from digintlab_langfuse.spans import observe_node_span
 
     mock_span = MagicMock()
@@ -831,8 +834,10 @@ async def test_active_parent_observation_propagates_to_created_task() -> None:
     _current_observation_context(mock_lf, mock_span)
 
     async def child_metadata() -> dict[str, JsonValue]:
-        result = with_langfuse_trace_metadata({})
-        raw = result["metadata"]
+        result = with_litellm_proxy_trace_metadata({})
+        extra_body = result["extra_body"]
+        assert isinstance(extra_body, dict)
+        raw = extra_body["metadata"]
         assert isinstance(raw, dict)
         return {str(k): v for k, v in raw.items()}
 
@@ -887,61 +892,55 @@ def _json_object(value: JsonValue) -> dict[str, JsonValue]:
     return value
 
 
-def _metadata(result: dict[str, JsonValue]) -> dict[str, JsonValue]:
-    return _json_object(result["metadata"])
-
-
 def _extra_body_metadata(result: dict[str, JsonValue]) -> dict[str, JsonValue]:
     return _json_object(_json_object(result["extra_body"])["metadata"])
 
 
-def test_litellm_trace_metadata_adds_langfuse_proxy_metadata() -> None:
-    from digintlab_langfuse.litellm import with_langfuse_trace_metadata
+def test_litellm_proxy_trace_metadata_uses_only_extra_body() -> None:
+    from digintlab_langfuse.litellm import with_litellm_proxy_trace_metadata
 
     fake_lf = MagicMock()
     fake_lf.get_current_trace_id.return_value = "trace-123"
     fake_lf.get_current_observation_id.return_value = "obs-456"
 
-    result = with_langfuse_trace_metadata({"metadata": {"tenant": "acme"}}, client_getter=lambda: fake_lf)
+    result = with_litellm_proxy_trace_metadata({"metadata": {"tenant": "acme"}}, client_getter=lambda: fake_lf)
 
-    metadata = _metadata(result)
-    assert metadata == {
+    assert "metadata" not in result
+    assert _extra_body_metadata(result) == {
         "tenant": "acme",
         "existing_trace_id": "trace-123",
         "trace_id": "trace-123",
         "parent_observation_id": "obs-456",
     }
-    assert _extra_body_metadata(result) == metadata
 
 
-def test_litellm_trace_metadata_prefers_active_node_parent_observation() -> None:
-    from digintlab_langfuse.litellm import with_langfuse_trace_metadata
+def test_litellm_proxy_trace_metadata_prefers_active_node_parent_observation() -> None:
+    from digintlab_langfuse.litellm import with_litellm_proxy_trace_metadata
 
     fake_lf = MagicMock()
     fake_lf.get_current_trace_id.return_value = "trace-123"
     fake_lf.get_current_observation_id.return_value = "root-obs"
 
-    result = with_langfuse_trace_metadata({}, client_getter=lambda: fake_lf, active_parent_getter=lambda: "node-obs")
+    result = with_litellm_proxy_trace_metadata({}, client_getter=lambda: fake_lf, active_parent_getter=lambda: "node-obs")
 
-    assert _metadata(result)["parent_observation_id"] == "node-obs"
+    assert _extra_body_metadata(result)["parent_observation_id"] == "node-obs"
 
 
-def test_litellm_trace_metadata_uses_run_id_as_session_id() -> None:
-    from digintlab_langfuse.litellm import with_langfuse_trace_metadata
+def test_litellm_proxy_trace_metadata_uses_run_id_as_session_id() -> None:
+    from digintlab_langfuse.litellm import with_litellm_proxy_trace_metadata
 
     fake_lf = MagicMock()
     fake_lf.get_current_trace_id.return_value = "trace-123"
     fake_lf.get_current_observation_id.return_value = None
 
-    result = with_langfuse_trace_metadata({"metadata": {"run_id": "run-123"}}, client_getter=lambda: fake_lf)
+    result = with_litellm_proxy_trace_metadata({"metadata": {"run_id": "run-123"}}, client_getter=lambda: fake_lf)
 
-    assert _metadata(result)["trace_id"] == "trace-123"
-    assert _metadata(result)["session_id"] == "run-123"
+    assert _extra_body_metadata(result)["trace_id"] == "trace-123"
     assert _extra_body_metadata(result)["session_id"] == "run-123"
 
 
-def test_litellm_trace_metadata_reads_run_manager_metadata() -> None:
-    from digintlab_langfuse.litellm import with_langfuse_trace_metadata
+def test_litellm_proxy_trace_metadata_reads_run_manager_metadata() -> None:
+    from digintlab_langfuse.litellm import with_litellm_proxy_trace_metadata
 
     fake_lf = MagicMock()
     fake_lf.get_current_trace_id.return_value = "trace-123"
@@ -949,27 +948,25 @@ def test_litellm_trace_metadata_reads_run_manager_metadata() -> None:
     run_manager = MagicMock()
     run_manager.metadata = {"run_id": "run-123", "trace_user_id": "analyst"}
 
-    result = with_langfuse_trace_metadata({}, run_manager, client_getter=lambda: fake_lf)
+    result = with_litellm_proxy_trace_metadata({}, run_manager, client_getter=lambda: fake_lf)
 
-    metadata = _metadata(result)
-    assert metadata == {
+    assert _extra_body_metadata(result) == {
         "run_id": "run-123",
         "trace_user_id": "analyst",
         "existing_trace_id": "trace-123",
         "trace_id": "trace-123",
         "session_id": "run-123",
     }
-    assert _extra_body_metadata(result) == metadata
 
 
-def test_litellm_trace_metadata_preserves_extra_body_metadata() -> None:
-    from digintlab_langfuse.litellm import with_langfuse_trace_metadata
+def test_litellm_proxy_trace_metadata_preserves_extra_body_metadata() -> None:
+    from digintlab_langfuse.litellm import with_litellm_proxy_trace_metadata
 
     fake_lf = MagicMock()
     fake_lf.get_current_trace_id.return_value = "trace-123"
     fake_lf.get_current_observation_id.return_value = None
 
-    result = with_langfuse_trace_metadata(
+    result = with_litellm_proxy_trace_metadata(
         {"metadata": {"run_id": "run-123"}, "extra_body": {"metadata": {"request_id": "req-1"}}},
         client_getter=lambda: fake_lf,
     )
@@ -983,16 +980,27 @@ def test_litellm_trace_metadata_preserves_extra_body_metadata() -> None:
     }
 
 
-def test_litellm_trace_metadata_leaves_kwargs_unchanged_without_active_trace() -> None:
-    from digintlab_langfuse.litellm import with_langfuse_trace_metadata
+def test_litellm_proxy_trace_metadata_leaves_kwargs_unchanged_without_active_trace() -> None:
+    from digintlab_langfuse.litellm import with_litellm_proxy_trace_metadata
 
     fake_lf = MagicMock()
     fake_lf.get_current_trace_id.return_value = None
 
     kwargs: dict[str, JsonValue] = {"metadata": {"tenant": "acme"}}
-    result = with_langfuse_trace_metadata(kwargs, client_getter=lambda: fake_lf)
+    result = with_litellm_proxy_trace_metadata(kwargs, client_getter=lambda: fake_lf)
 
     assert result is kwargs
+
+
+def test_litellm_proxy_trace_metadata_rejects_non_object_extra_body() -> None:
+    from digintlab_langfuse.litellm import with_litellm_proxy_trace_metadata
+
+    fake_lf = MagicMock()
+    fake_lf.get_current_trace_id.return_value = "trace-123"
+    fake_lf.get_current_observation_id.return_value = None
+
+    with pytest.raises(TypeError, match="extra_body must be a JSON object"):
+        with_litellm_proxy_trace_metadata({"extra_body": "invalid"}, client_getter=lambda: fake_lf)
 
 
 def test_tool_span_callback_emits_default_tool_observation() -> None:

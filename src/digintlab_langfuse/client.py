@@ -24,7 +24,7 @@ from opentelemetry.sdk.trace.export import SpanExporter
 
 from digintlab_langfuse._reliability import fail_open_context
 from digintlab_langfuse.callbacks import ToolObservationResult, ToolSpanCallback
-from digintlab_langfuse.litellm import with_langfuse_trace_metadata
+from digintlab_langfuse.litellm import with_litellm_proxy_trace_metadata
 from digintlab_langfuse.scores import (
     DEFAULT_SCORE_TARGET,
     BooleanScore,
@@ -263,13 +263,13 @@ class LangfuseTelemetry:
             client_getter=lambda: self.client,
         )
 
-    def with_litellm_trace_metadata(
+    def with_litellm_proxy_trace_metadata(
         self,
         kwargs: dict[str, JsonValue],
         run_manager: object | None = None,
     ) -> dict[str, JsonValue]:
-        """Attach this telemetry client's active trace metadata to LiteLLM-compatible kwargs."""
-        return with_langfuse_trace_metadata(kwargs, run_manager, client_getter=lambda: self.client)
+        """Attach this telemetry client's active trace metadata to LiteLLM proxy kwargs."""
+        return with_litellm_proxy_trace_metadata(kwargs, run_manager, client_getter=lambda: self.client)
 
     @contextmanager
     def trace_call(
