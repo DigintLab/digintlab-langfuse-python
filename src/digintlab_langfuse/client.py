@@ -1,75 +1,64 @@
-"""Langfuse SDK client construction and instrumentation helpers.
-
-The module stores explicit Langfuse settings in SDK environment variables, creates `Langfuse` clients, wraps the LangChain callback handler, and
-starts or stops optional `httpx` and `botocore` OpenTelemetry instrumentors.
-"""
+"""Langfuse SDK client construction, lifecycle, and instrumentation helpers."""
 
 import asyncio
 import logging
-import os
+import math
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager
-from dataclasses import dataclass
-from typing import TypedDict
+from dataclasses import dataclass, field
+from typing import Self, TypedDict
 
 import httpx
 from langchain_core.callbacks import BaseCallbackHandler
 from langfuse import Langfuse, propagate_attributes
 from langfuse.langchain import CallbackHandler as LangfuseCallbackHandler
 from langfuse.types import MaskFunction, MaskOtelSpansFunction, TraceContext
-from opentelemetry.instrumentation.botocore import BotocoreInstrumentor
-from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SpanExporter
 
+from digintlab_langfuse._instrumentation import ProcessInstrumentation
+from digintlab_langfuse._lifecycle import (
+    DEFAULT_OPERATION_TIMEOUT_SECONDS,
+    flush_client,
+    initialize_client,
+    shutdown_client,
+    shutdown_failed_client,
+    shutdown_started,
+    validate_operation_timeout,
+)
 from digintlab_langfuse._reliability import fail_open_context
 from digintlab_langfuse.callbacks import ToolObservationResult, ToolSpanCallback
+from digintlab_langfuse.json_values import JsonValue, to_json_value
 from digintlab_langfuse.litellm import with_litellm_proxy_trace_metadata
+from digintlab_langfuse.redaction import SensitiveDataRedactionConfig, create_sensitive_data_mask, create_sensitive_data_otel_mask
 from digintlab_langfuse.scores import (
     DEFAULT_SCORE_TARGET,
-    BooleanScore,
-    CategoricalScore,
-    NumericScore,
     Score,
     ScoreTarget,
     ScoreValue,
-    TextScore,
     emit_score,
     score_current_span,
     score_current_trace,
 )
 from digintlab_langfuse.spans import (
     ObservationKind,
+    TraceRuntimeContext,
     observe_node_span,
-    scrub_auth_header,
-)
-from digintlab_langfuse.spans import (
-    current_trace_id as current_langfuse_trace_id,
 )
 from digintlab_langfuse.spans import (
     emit_guardrail_observation as emit_langfuse_guardrail_observation,
 )
-from digintlab_langfuse.types import JsonValue, to_json_value
+from digintlab_langfuse.spans import (
+    trace_runtime_context as capture_trace_runtime_context,
+)
 
-LANGFUSE_DEFAULT_BASE_URL = "https://cloud.langfuse.com"
+_LANGFUSE_DEFAULT_BASE_URL = "https://cloud.langfuse.com"
 logger = logging.getLogger(__name__)
 
-
-def _score_target(
-    *,
-    run_id: str | None,
-    trace_id: str | None,
-    target: ScoreTarget,
-) -> ScoreTarget:
-    if run_id is None and trace_id is None:
-        return target
-    if target is not DEFAULT_SCORE_TARGET:
-        msg = "Pass either target or run_id/trace_id, not both."
-        raise ValueError(msg)
-    return ScoreTarget(run_id=run_id, trace_id=trace_id)
+__all__ = ["LangfuseClientConfig", "LangfuseTelemetry", "init_langfuse_telemetry"]
 
 
-class LangfuseInitKwargs(TypedDict):
+class _LangfuseInitKwargs(TypedDict):
     """Keyword arguments forwarded to the Langfuse SDK client."""
 
     public_key: str
@@ -95,8 +84,8 @@ class LangfuseClientConfig:
     """Configuration required to initialize the Langfuse SDK client."""
 
     public_key: str
-    secret_key: str
-    base_url: str = LANGFUSE_DEFAULT_BASE_URL
+    secret_key: str = field(repr=False)
+    base_url: str = _LANGFUSE_DEFAULT_BASE_URL
     timeout: int | None = None
     environment: str | None = None
     release: str | None = None
@@ -110,20 +99,50 @@ class LangfuseClientConfig:
     should_export_span: Callable[[ReadableSpan], bool] | None = None
     tracer_provider: TracerProvider | None = None
     span_exporter: SpanExporter | None = None
-    redact_http_auth_headers: bool = True
+    redact_http_auth_headers: bool = False
+    sensitive_data_redaction: SensitiveDataRedactionConfig | None = None
+    allow_insecure_http: bool = False
+    flush_timeout_seconds: float = DEFAULT_OPERATION_TIMEOUT_SECONDS
+    shutdown_timeout_seconds: float = DEFAULT_OPERATION_TIMEOUT_SECONDS
+
+    def __post_init__(self) -> None:
+        """Validate process-level client configuration before allocating SDK resources."""
+        if not self.public_key.strip() or not self.secret_key.strip():
+            message = "Langfuse public_key and secret_key must not be empty."
+            raise ValueError(message)
+        url = httpx.URL(self.base_url)
+        if url.host is None or url.scheme not in {"http", "https"}:
+            message = "Langfuse base_url must be an absolute HTTP(S) URL."
+            raise ValueError(message)
+        if url.scheme != "https" and not self.allow_insecure_http:
+            message = "Plain HTTP Langfuse endpoints require allow_insecure_http=True."
+            raise ValueError(message)
+        if self.timeout is not None and self.timeout <= 0:
+            message = "Langfuse timeout must be greater than zero."
+            raise ValueError(message)
+        if self.flush_at is not None and self.flush_at < 1:
+            message = "Langfuse flush_at must be at least one."
+            raise ValueError(message)
+        if self.flush_interval is not None and (not math.isfinite(self.flush_interval) or self.flush_interval <= 0):
+            message = "Langfuse flush_interval must be finite and greater than zero."
+            raise ValueError(message)
+        if self.sample_rate is not None and not 0 <= self.sample_rate <= 1:
+            message = "Langfuse sample_rate must be between zero and one."
+            raise ValueError(message)
+        validate_operation_timeout(self.flush_timeout_seconds)
+        validate_operation_timeout(self.shutdown_timeout_seconds)
+        if self.sensitive_data_redaction is not None and (self.mask is not None or self.mask_otel_spans is not None):
+            message = "Pass sensitive_data_redaction or custom mask hooks, not both."
+            raise ValueError(message)
 
 
-def configure_langfuse_environment(config: LangfuseClientConfig) -> None:
-    """Expose explicit Langfuse config under SDK-compatible env vars."""
-    os.environ["LANGFUSE_PUBLIC_KEY"] = config.public_key
-    os.environ["LANGFUSE_SECRET_KEY"] = config.secret_key
-    os.environ["LANGFUSE_BASE_URL"] = config.base_url
-
-
-def init_langfuse_client(config: LangfuseClientConfig) -> Langfuse:
-    """Initialize and return the authenticated Langfuse SDK singleton."""
-    configure_langfuse_environment(config)
-    kwargs: LangfuseInitKwargs = {
+def _init_langfuse_client(config: LangfuseClientConfig) -> Langfuse:
+    """Initialize the sole Langfuse SDK resource owner for one public key."""
+    mask = create_sensitive_data_mask(config.sensitive_data_redaction) if config.sensitive_data_redaction is not None else config.mask
+    mask_otel_spans = (
+        create_sensitive_data_otel_mask(config.sensitive_data_redaction) if config.sensitive_data_redaction is not None else config.mask_otel_spans
+    )
+    kwargs: _LangfuseInitKwargs = {
         "public_key": config.public_key,
         "secret_key": config.secret_key,
         "base_url": config.base_url,
@@ -134,19 +153,14 @@ def init_langfuse_client(config: LangfuseClientConfig) -> Langfuse:
         "flush_at": config.flush_at,
         "flush_interval": config.flush_interval,
         "sample_rate": config.sample_rate,
-        "mask": config.mask,
-        "mask_otel_spans": config.mask_otel_spans,
+        "mask": mask,
+        "mask_otel_spans": mask_otel_spans,
         "httpx_client": config.httpx_client,
         "should_export_span": config.should_export_span,
         "tracer_provider": config.tracer_provider,
         "span_exporter": config.span_exporter,
     }
-    return Langfuse(**kwargs)
-
-
-async def shutdown_langfuse_client(lf: Langfuse) -> None:
-    """Shutdown Langfuse telemetry without blocking the event loop indefinitely."""
-    await asyncio.wait_for(asyncio.to_thread(lf.shutdown), timeout=30.0)
+    return initialize_client(config.public_key, lambda: Langfuse(**kwargs))
 
 
 class LangfuseTelemetry:
@@ -164,44 +178,32 @@ class LangfuseTelemetry:
         instrument_httpx: bool,
         instrument_botocore: bool,
         tracer_provider: TracerProvider | None = None,
-        redact_http_auth_headers: bool = True,
+        redact_http_auth_headers: bool = False,
+        flush_timeout_seconds: float = DEFAULT_OPERATION_TIMEOUT_SECONDS,
+        shutdown_timeout_seconds: float = DEFAULT_OPERATION_TIMEOUT_SECONDS,
     ) -> None:
+        validate_operation_timeout(flush_timeout_seconds)
+        validate_operation_timeout(shutdown_timeout_seconds)
         self.client = client
         self._langchain_handler = LangfuseCallbackHandler(public_key=public_key)
-        self._httpx_instrumentor = HTTPXClientInstrumentor() if instrument_httpx else None
-        self._botocore_instrumentor = BotocoreInstrumentor() if instrument_botocore else None  # type: ignore[no-untyped-call]
-        self._tracer_provider = tracer_provider
-        self._redact_http_auth_headers = redact_http_auth_headers
-        self._instrumented = False
+        self._instrumentation = ProcessInstrumentation(
+            instrument_httpx=instrument_httpx,
+            instrument_botocore=instrument_botocore,
+            tracer_provider=tracer_provider,
+            redact_http_auth_headers=redact_http_auth_headers,
+        )
+        self._flush_timeout_seconds = flush_timeout_seconds
+        self._shutdown_timeout_seconds = shutdown_timeout_seconds
+        self._client_shutdown = False
+        self._shutdown_lock = asyncio.Lock()
 
     def instrument(self) -> None:
         """Install configured process-level OpenTelemetry instrumentors."""
-        if self._instrumented:
-            return
-        instrumentor_kwargs: dict[str, TracerProvider] = {}
-        if self._tracer_provider is not None:
-            instrumentor_kwargs["tracer_provider"] = self._tracer_provider
-        if self._botocore_instrumentor is not None:
-            self._botocore_instrumentor.instrument(**instrumentor_kwargs)
-        if self._httpx_instrumentor is not None:
-            if self._redact_http_auth_headers:
-                self._httpx_instrumentor.instrument(request_hook=scrub_auth_header, **instrumentor_kwargs)
-            else:
-                self._httpx_instrumentor.instrument(**instrumentor_kwargs)
-        self._instrumented = True
+        self._instrumentation.instrument()
 
     def uninstrument(self) -> None:
         """Remove configured process-level OpenTelemetry instrumentors."""
-        if not self._instrumented:
-            return
-
-        try:
-            if self._botocore_instrumentor is not None:
-                self._botocore_instrumentor.uninstrument()
-            if self._httpx_instrumentor is not None:
-                self._httpx_instrumentor.uninstrument()
-        finally:
-            self._instrumented = False
+        self._instrumentation.uninstrument()
 
     def langchain_callbacks(
         self,
@@ -242,10 +244,6 @@ class LangfuseTelemetry:
         """Open a node observation with this telemetry client's active trace context."""
         return observe_node_span(name, enabled=enabled, kind=kind, client_getter=lambda: self.client)
 
-    def current_trace_id(self) -> str | None:
-        """Return this telemetry client's active trace id."""
-        return current_langfuse_trace_id(self.client)
-
     def emit_guardrail_observation(
         self,
         name: str,
@@ -267,9 +265,33 @@ class LangfuseTelemetry:
         self,
         kwargs: dict[str, JsonValue],
         run_manager: object | None = None,
+        *,
+        trace_context: TraceRuntimeContext | None = None,
     ) -> dict[str, JsonValue]:
         """Attach this telemetry client's active trace metadata to LiteLLM proxy kwargs."""
-        return with_litellm_proxy_trace_metadata(kwargs, run_manager, client_getter=lambda: self.client)
+        return with_litellm_proxy_trace_metadata(
+            kwargs,
+            run_manager,
+            client_getter=lambda: self.client,
+            trace_context=trace_context,
+        )
+
+    def trace_runtime_context(
+        self,
+        *,
+        session_id: str | None = None,
+        user_id: str | None = None,
+        run_id: str | None = None,
+        metadata: dict[str, JsonValue] | None = None,
+    ) -> TraceRuntimeContext | None:
+        """Capture portable trace linkage for detached or queued work."""
+        return capture_trace_runtime_context(
+            self.client,
+            session_id=session_id,
+            user_id=user_id,
+            run_id=run_id,
+            metadata=metadata,
+        )
 
     @contextmanager
     def trace_call(
@@ -299,10 +321,11 @@ class LangfuseTelemetry:
             trace_context = TraceContext(trace_id=trace_id)
         else:
             trace_context = None
-        if not tags and metadata is None and version is None and trace_name is None:
-            propagation = propagate_attributes(session_id=session_id, user_id=user_id)
-        else:
-            propagation = propagate_attributes(
+
+        def start_propagation() -> AbstractContextManager[object]:
+            if not tags and metadata is None and version is None and trace_name is None:
+                return propagate_attributes(session_id=session_id, user_id=user_id)
+            return propagate_attributes(
                 session_id=session_id,
                 user_id=user_id,
                 trace_name=trace_name or name,
@@ -311,35 +334,33 @@ class LangfuseTelemetry:
                 version=version,
             )
 
-        with propagation:
+        with fail_open_context(
+            start_propagation,
+            logger=logger,
+            operation="Langfuse trace attribute propagation",
+        ):
             if not root_observation:
                 yield
                 return
-            if trace_context is None and root_input is None and root_metadata is None and version is None:
-                with fail_open_context(
-                    lambda: self.client.start_as_current_observation(name=name, as_type=root_kind.value),
-                    logger=logger,
-                    operation="Langfuse root observation lifecycle",
-                ):
-                    yield
-                return
-            with fail_open_context(
-                lambda: self.client.start_as_current_observation(
+
+            def start_root_observation() -> AbstractContextManager[object]:
+                if trace_context is None and root_input is None and root_metadata is None and version is None:
+                    return self.client.start_as_current_observation(name=name, as_type=root_kind.value)
+                return self.client.start_as_current_observation(
                     trace_context=trace_context,
                     name=name,
                     as_type=root_kind.value,
                     input=to_json_value(root_input),
                     metadata=root_metadata,
                     version=version,
-                ),
+                )
+
+            with fail_open_context(
+                start_root_observation,
                 logger=logger,
                 operation="Langfuse root observation lifecycle",
             ):
                 yield
-
-    def trace_url(self, *, trace_id: str | None = None) -> str | None:
-        """Return a Langfuse trace URL for the active or provided trace id."""
-        return self.client.get_trace_url(trace_id=trace_id)
 
     def emit_score[TValue: ScoreValue](
         self,
@@ -350,54 +371,6 @@ class LangfuseTelemetry:
         """Emit a typed Langfuse score with this telemetry client's SDK client."""
         emit_score(self.client, score=score, target=target)
 
-    def emit_numeric_score(
-        self,
-        name: str,
-        value: float,
-        *,
-        run_id: str | None = None,
-        trace_id: str | None = None,
-        target: ScoreTarget = DEFAULT_SCORE_TARGET,
-    ) -> None:
-        """Emit a numeric Langfuse score with this telemetry client's SDK client."""
-        self.emit_score(score=NumericScore(name=name, value=value), target=_score_target(run_id=run_id, trace_id=trace_id, target=target))
-
-    def emit_categorical_score(
-        self,
-        name: str,
-        value: str,
-        *,
-        run_id: str | None = None,
-        trace_id: str | None = None,
-        target: ScoreTarget = DEFAULT_SCORE_TARGET,
-    ) -> None:
-        """Emit a categorical Langfuse score with this telemetry client's SDK client."""
-        self.emit_score(score=CategoricalScore(name=name, value=value), target=_score_target(run_id=run_id, trace_id=trace_id, target=target))
-
-    def emit_boolean_score(
-        self,
-        name: str,
-        value: bool,
-        *,
-        run_id: str | None = None,
-        trace_id: str | None = None,
-        target: ScoreTarget = DEFAULT_SCORE_TARGET,
-    ) -> None:
-        """Emit a boolean Langfuse score with this telemetry client's SDK client."""
-        self.emit_score(score=BooleanScore(name=name, value=value), target=_score_target(run_id=run_id, trace_id=trace_id, target=target))
-
-    def emit_text_score(
-        self,
-        name: str,
-        value: str,
-        *,
-        run_id: str | None = None,
-        trace_id: str | None = None,
-        target: ScoreTarget = DEFAULT_SCORE_TARGET,
-    ) -> None:
-        """Emit a text Langfuse score with this telemetry client's SDK client."""
-        self.emit_score(score=TextScore(name=name, value=value), target=_score_target(run_id=run_id, trace_id=trace_id, target=target))
-
     def score_current_trace[TValue: ScoreValue](self, *, score: Score[TValue]) -> None:
         """Attach a typed score to the trace active in this telemetry client."""
         score_current_trace(self.client, score=score)
@@ -406,65 +379,68 @@ class LangfuseTelemetry:
         """Attach a typed score to the active span or generation in this telemetry client."""
         score_current_span(self.client, score=score)
 
-    def score_current_trace_numeric(self, name: str, value: float) -> None:
-        """Attach a numeric score to the active trace."""
-        self.score_current_trace(score=NumericScore(name=name, value=value))
-
-    def score_current_trace_categorical(self, name: str, value: str) -> None:
-        """Attach a categorical score to the active trace."""
-        self.score_current_trace(score=CategoricalScore(name=name, value=value))
-
-    def score_current_trace_boolean(self, name: str, value: bool) -> None:
-        """Attach a boolean score to the active trace."""
-        self.score_current_trace(score=BooleanScore(name=name, value=value))
-
-    def score_current_trace_text(self, name: str, value: str) -> None:
-        """Attach a text score to the active trace."""
-        self.score_current_trace(score=TextScore(name=name, value=value))
-
-    def score_current_span_numeric(self, name: str, value: float) -> None:
-        """Attach a numeric score to the active span or generation."""
-        self.score_current_span(score=NumericScore(name=name, value=value))
-
-    def score_current_span_categorical(self, name: str, value: str) -> None:
-        """Attach a categorical score to the active span or generation."""
-        self.score_current_span(score=CategoricalScore(name=name, value=value))
-
-    def score_current_span_boolean(self, name: str, value: bool) -> None:
-        """Attach a boolean score to the active span or generation."""
-        self.score_current_span(score=BooleanScore(name=name, value=value))
-
-    def score_current_span_text(self, name: str, value: str) -> None:
-        """Attach a text score to the active span or generation."""
-        self.score_current_span(score=TextScore(name=name, value=value))
-
-    @staticmethod
-    def deterministic_trace_id(seed: str) -> str:
-        """Return a deterministic Langfuse trace id for an external id."""
-        return Langfuse.create_trace_id(seed=seed)
-
     async def shutdown(self) -> None:
         """Stop instrumentation and shutdown Langfuse telemetry with the library timeout."""
-        try:
-            self.uninstrument()
-        finally:
-            await shutdown_langfuse_client(self.client)
+        async with self._shutdown_lock:
+            uninstrument_error: Exception | None = None
+            try:
+                self.uninstrument()
+            except RuntimeError as exc:
+                uninstrument_error = exc
+            if not self._client_shutdown:
+                await shutdown_client(self.client, timeout_seconds=self._shutdown_timeout_seconds)
+                self._client_shutdown = True
+            if uninstrument_error is not None:
+                raise uninstrument_error
+
+    async def flush(self) -> None:
+        """Flush pending Langfuse telemetry without shutting down the client."""
+        async with self._shutdown_lock:
+            if self._client_shutdown:
+                message = "Cannot flush Langfuse telemetry after shutdown."
+                raise RuntimeError(message)
+            await flush_client(self.client, timeout_seconds=self._flush_timeout_seconds)
+
+    async def __aenter__(self) -> Self:
+        """Return this initialized telemetry owner."""
+        if self._client_shutdown or shutdown_started(self.client):
+            message = "Cannot enter a Langfuse telemetry owner after shutdown."
+            raise RuntimeError(message)
+        return self
+
+    async def __aexit__(self, _exc_type: object, _exc: object, _traceback: object) -> None:
+        """Shutdown telemetry when leaving an async ownership scope."""
+        await self.shutdown()
 
 
 def init_langfuse_telemetry(
     config: LangfuseClientConfig,
     *,
-    instrument_httpx: bool = True,
+    instrument_httpx: bool = False,
     instrument_botocore: bool = False,
 ) -> LangfuseTelemetry:
     """Initialize Langfuse and install project-level instrumentation hooks."""
-    telemetry = LangfuseTelemetry(
-        init_langfuse_client(config),
-        public_key=config.public_key,
-        instrument_httpx=instrument_httpx,
-        instrument_botocore=instrument_botocore,
-        tracer_provider=config.tracer_provider,
-        redact_http_auth_headers=config.redact_http_auth_headers,
-    )
-    telemetry.instrument()
+    client = _init_langfuse_client(config)
+    try:
+        telemetry = LangfuseTelemetry(
+            client,
+            public_key=config.public_key,
+            instrument_httpx=instrument_httpx,
+            instrument_botocore=instrument_botocore,
+            tracer_provider=config.tracer_provider,
+            redact_http_auth_headers=config.redact_http_auth_headers,
+            flush_timeout_seconds=config.flush_timeout_seconds,
+            shutdown_timeout_seconds=config.shutdown_timeout_seconds,
+        )
+        telemetry.instrument()
+    except BaseException:
+        try:
+            shutdown_failed_client(
+                client,
+                public_key=config.public_key,
+                timeout_seconds=config.shutdown_timeout_seconds,
+            )
+        except Exception:
+            logger.exception("Failed to shutdown Langfuse client after instrumentation setup failure")
+        raise
     return telemetry

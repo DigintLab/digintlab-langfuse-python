@@ -2,119 +2,107 @@
 
 Typed Python helpers for Langfuse tracing, scoring, callbacks, and LiteLLM metadata in DigIntLab agent runtimes.
 
-The package keeps the reusable Langfuse integration logic outside application code. It owns SDK client construction, process instrumentation, LangChain callbacks, trace propagation, observation helpers, score helpers, and JSON-safe payload conversion. Application repositories should keep their own domain-specific defaults and adapters on top of this package.
-
 ## Install
 
-Requires Python 3.13+ and Langfuse 4.x (`>=4.14.2,<5`).
+Requires Python 3.13 or 3.14. Langfuse is pinned to the version tested by this package.
 
 ```bash
 uv add digintlab-langfuse-python
 ```
 
-The import package is:
+## Usage
 
 ```python
-import digintlab_langfuse
-```
+from digintlab_langfuse import LangfuseClientConfig, init_langfuse_telemetry
 
-## Development
-
-```bash
-uv sync --group dev
-uv run ruff format .
-uv run ruff check .
-uv run mypy src tests
-uv run pytest
-```
-
-## Scope
-
-This library is intentionally small:
-
-- `digintlab_langfuse.client` builds Langfuse clients, owns instrumentation, forwards configured tracer providers to HTTP/AWS instrumentors, and provides trace context managers.
-- `digintlab_langfuse.spans` opens observations, generation spans, guardrail observations, and HTTP auth redaction hooks.
-- `digintlab_langfuse.callbacks` emits Langfuse tool observations from LangChain tool callbacks.
-- `digintlab_langfuse.litellm` forwards active Langfuse trace metadata into LiteLLM-compatible request kwargs.
-- `digintlab_langfuse.scores` provides typed score helpers for trace, observation, span, and session scores.
-- `digintlab_langfuse.timing` provides local elapsed timers and OpenTelemetry span timing aggregation.
-- `digintlab_langfuse.budgets` validates numeric ceilings and compares observed measurements to budget limits.
-
-Prompt and experiment helpers exist for Langfuse workflows, but applications should expose them only when they have a real product use case.
-
-## Observation lifecycle
-
-`observe_node_span()` is a context manager, not a detached trace-link helper. When tracing is enabled and a trace is active, it opens the node with Langfuse `start_as_current_observation`; this makes the node the SDK-current parent for work executed inside the block and requests closure of the node observation on normal or exceptional exit. When disabled or outside an active trace, it is a no-op.
-
-`emit_guardrail_observation()` emits only while an `observe_node_span()` scope is active. The package-local state retains the live node handle and a shared active flag: the helper starts the guardrail from that handle, making it a direct node child even if a generation is currently nested inside the node, and copied async contexts become inert after the node closes. It does not construct a detached `TraceContext`. The guardrail observation is explicitly ended before the function returns. Application-level root observations opened by `LangfuseTelemetry.trace_call()` are context-managed in the same way. When the SDK accepts the lifecycle calls, their root, node, and guardrail observations therefore all have an end time after those scopes exit.
-
-`ToolSpanCallback` also requires an active parent observation. It uses the retained node parent when available and otherwise the SDK-current observation, but it no-ops when both are absent. A trace id alone is deliberately insufficient because starting a tool from it creates a logical-root observation whose lifecycle is not owned by the callback's surrounding application scope.
-
-Runtime observation failures are fail-open: client lookup and observation start, update, or end errors are logged without replacing application results or exceptions. Initialization and instrumentation configuration remain fail-fast. If the SDK itself rejects an end call, the package cannot guarantee a server-side end time.
-
-## Examples
-
-Emit a numeric elapsed-time score for a local operation:
-
-```python
-from digintlab_langfuse import ScoreTarget, score_elapsed
-
-with score_elapsed(
-    lf,
-    name="provider_call_elapsed_seconds",
-    target=ScoreTarget(run_id=run_id, trace_id=trace_id),
-    digits=2,
-):
-    call_provider()
-```
-
-Emit common run and current-trace scores through the telemetry owner without manually building score objects:
-
-```python
-telemetry.emit_numeric_score("provider_call_elapsed_seconds", 1.42, run_id=run_id, trace_id=trace_id)
-telemetry.score_current_trace_categorical("routing_decision", "escalated")
-```
-
-Use bound runtime helpers when an application owns one telemetry object:
-
-```python
-tool_callback = telemetry.tool_span_callback(summarize_output=summarize_tool_output)
-with telemetry.observe_node_span("correlate", enabled=True):
-    telemetry.emit_guardrail_observation(
-        "output_policy",
-        output={"allowed": True},
-        status_message="passed",
-    )
-    run_node()
-kwargs = telemetry.with_litellm_proxy_trace_metadata(kwargs)
-```
-
-Collect provider/client-only OpenTelemetry span timings:
-
-```python
-from digintlab_langfuse import LangfuseClientConfig, create_span_timing_recorder, init_langfuse_telemetry
-
-timing = create_span_timing_recorder()
 telemetry = init_langfuse_telemetry(
     LangfuseClientConfig(
         public_key=public_key,
         secret_key=secret_key,
-        tracer_provider=timing.tracer_provider,
-    )
+        environment="production",
+        release=release,
+        redact_http_auth_headers=True,
+    ),
+    instrument_httpx=True,
 )
 
-buckets = timing.snapshot(reset=True)
+async with telemetry:
+    with telemetry.trace_call(
+        name="agent-run",
+        session_id=session_id,
+        user_id=user_id,
+        root_observation=True,
+    ):
+        await run_agent()
 ```
 
-Check numeric runtime or cost budgets:
+Scores use one typed API rather than type-specific convenience methods:
 
 ```python
-from digintlab_langfuse import check_numeric_budgets, validate_numeric_budget_ceilings
+from digintlab_langfuse.scores import NumericScore, ScoreTarget
 
-ceilings = validate_numeric_budget_ceilings({"latency_seconds": 10.0}, allowed_names={"latency_seconds"})
-violations = check_numeric_budgets({"latency_seconds": 12.5}, ceilings)
+telemetry.emit_score(
+    score=NumericScore(name="quality", value=0.95),
+    target=ScoreTarget(trace_id=trace_id),
+)
 ```
 
-## Validation
+Important behavior:
 
-CI runs formatting, linting, strict typing, and tests through `uv`.
+- Create one telemetry owner per process, after workers fork. Do not also construct `Langfuse(...)` directly.
+- HTTPX and botocore instrumentation are opt-in. Instrumentation owned by other libraries is left untouched; initialization fails when HTTPX is externally instrumented and authorization-header redaction is requested because the redaction hooks cannot be guaranteed.
+- Observation helpers fail open so telemetry errors do not replace application results or exceptions. Configuration, scoring, flush, and shutdown fail fast.
+- Use `await telemetry.flush()` to export pending data without closing the owner. The async context manager shuts it down.
+- Capture `telemetry.trace_runtime_context()` before sending work across a process or queue boundary. Pass it to `with_litellm_proxy_trace_metadata()` in the worker.
+- Plain HTTP endpoints require `allow_insecure_http=True`.
+
+## Sensitive data
+
+PII redaction is optional:
+
+```bash
+uv add "digintlab-langfuse-python[redaction]"
+```
+
+```python
+from digintlab_langfuse import LangfuseClientConfig, SensitiveDataRedactionConfig
+
+config = LangfuseClientConfig(
+    public_key=public_key,
+    secret_key=secret_key,
+    sensitive_data_redaction=SensitiveDataRedactionConfig(
+        pii_entities=frozenset({"EMAIL_ADDRESS", "IP_ADDRESS", "PHONE_NUMBER"}),
+        pii_score_threshold=0.4,
+        redact_bearer_tokens=True,
+    ),
+)
+```
+
+The policy masks common credential fields and bearer tokens, then uses Presidio's local rule-based recognizers for PII. It uses Presidio's bundled domain-suffix snapshot and does not load an NLP model, call an LLM, or make network requests. Configure `pii_entities` and `pii_score_threshold` for the data you expect; use `mask` and `mask_otel_spans` for a fully custom policy.
+
+> [!WARNING]
+> Do not put sensitive data in span names, identifiers, links, events, or resource attributes. OpenTelemetry export hooks cannot rewrite them.
+>
+> `SensitiveDataRedactionConfig` also does not sanitize metadata forwarded to LiteLLM. Keep runtime-context, run-manager, and request metadata non-sensitive,
+> or sanitize it before calling `with_litellm_proxy_trace_metadata()`.
+
+HTTP authorization-header redaction is separate. Enable both `instrument_httpx=True` and `redact_http_auth_headers=True`. Tool callbacks capture inputs and outputs unless you provide `summarize_output` or enable masking.
+
+## Development
+
+```bash
+task install
+task format
+task check
+task test
+```
+
+Run the authenticated E2E suite only against a disposable Langfuse project:
+
+```bash
+RUN_LANGFUSE_E2E=1 \
+LANGFUSE_E2E_PUBLIC_KEY=... \
+LANGFUSE_E2E_SECRET_KEY=... \
+LANGFUSE_E2E_BASE_URL=https://cloud.langfuse.com \
+task test-e2e
+```

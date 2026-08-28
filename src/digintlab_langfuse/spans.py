@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 
-import httpx
 from langfuse import (
     Langfuse,
     LangfuseAgent,
@@ -29,10 +28,11 @@ from langfuse import (
 from langfuse.api.commons.types import ObservationLevel
 from langfuse.model import ChatPromptClient, TextPromptClient
 from langfuse.types import TraceContext
+from opentelemetry.instrumentation.httpx import RequestInfo
 from opentelemetry.trace import Span
 
 from digintlab_langfuse._reliability import fail_open_context
-from digintlab_langfuse.types import JsonValue, to_json_value
+from digintlab_langfuse.json_values import JsonValue, to_json_value
 
 OBSERVATION_STATUS_MESSAGE_MAX_CHARS = 200
 logger = logging.getLogger(__name__)
@@ -104,16 +104,25 @@ class TraceRuntimeContext:
         if self.session_id:
             metadata["session_id"] = self.session_id
         if self.user_id:
-            metadata["user_id"] = self.user_id
+            metadata["trace_user_id"] = self.user_id
         if self.parent_observation_id:
             metadata["parent_observation_id"] = self.parent_observation_id
         return metadata
 
 
-def active_parent_observation_id() -> str | None:
-    """Return the active node observation id, or None when it is unavailable."""
+def _shares_langfuse_owner(client: Langfuse, candidate: object) -> bool:
+    if client is candidate:
+        return True
+    if not isinstance(candidate, Langfuse):
+        return False
+    resources = client._resources  # noqa: SLF001 - exact-pinned SDK facades share this owner.
+    return resources is not None and resources is candidate._resources  # noqa: SLF001
+
+
+def active_parent_observation_id(client: object | None = None) -> str | None:
+    """Return the active node observation id when it belongs to the requested client."""
     parent = _active_parent_observation()
-    if parent is None:
+    if parent is None or (client is not None and not _shares_langfuse_owner(parent.client, client)):
         return None
     observation_id = parent.observation.id
     return observation_id if isinstance(observation_id, str) and observation_id else None
@@ -142,7 +151,7 @@ def trace_runtime_context(
     current_observation_id = raw_current_observation_id if isinstance(raw_current_observation_id, str) and raw_current_observation_id else None
     return TraceRuntimeContext(
         trace_id=trace_id,
-        parent_observation_id=active_parent_observation_id() or current_observation_id,
+        parent_observation_id=active_parent_observation_id(client) or current_observation_id,
         session_id=session_id,
         user_id=user_id,
         run_id=run_id,
@@ -161,27 +170,7 @@ def _start_current_node_observation(
     name: str,
     kind: ObservationKind,
 ) -> AbstractContextManager[_NodeObservation]:
-    observation_context: AbstractContextManager[_NodeObservation]
-    match kind:
-        case ObservationKind.GENERATION:
-            observation_context = client.start_as_current_observation(name=name, as_type="generation")
-        case ObservationKind.EMBEDDING:
-            observation_context = client.start_as_current_observation(name=name, as_type="embedding")
-        case ObservationKind.SPAN:
-            observation_context = client.start_as_current_observation(name=name, as_type="span")
-        case ObservationKind.AGENT:
-            observation_context = client.start_as_current_observation(name=name, as_type="agent")
-        case ObservationKind.TOOL:
-            observation_context = client.start_as_current_observation(name=name, as_type="tool")
-        case ObservationKind.CHAIN:
-            observation_context = client.start_as_current_observation(name=name, as_type="chain")
-        case ObservationKind.RETRIEVER:
-            observation_context = client.start_as_current_observation(name=name, as_type="retriever")
-        case ObservationKind.EVALUATOR:
-            observation_context = client.start_as_current_observation(name=name, as_type="evaluator")
-        case ObservationKind.GUARDRAIL:
-            observation_context = client.start_as_current_observation(name=name, as_type="guardrail")
-    return observation_context
+    return client.start_as_current_observation(name=name, as_type=kind.value)
 
 
 @contextmanager
@@ -320,7 +309,7 @@ def emit_guardrail_observation(
             return
 
         lf = (client_getter or get_client)()
-        if lf is not parent.client or current_trace_id(lf) is None:
+        if not _shares_langfuse_owner(parent.client, lf) or current_trace_id(lf) is None:
             return
 
         status = status_message[:OBSERVATION_STATUS_MESSAGE_MAX_CHARS] if status_message else None
@@ -337,11 +326,14 @@ def emit_guardrail_observation(
         logger.exception("Failed to emit Langfuse guardrail observation")
 
 
-def scrub_auth_header(span: Span, request: httpx.Request) -> None:
+def scrub_auth_header(span: Span, request: RequestInfo) -> None:
     """Redact credential material from OpenTelemetry HTTP spans before export."""
     if not span.is_recording():
         return
-    if "authorization" in request.headers:
+    if request.headers is not None and "authorization" in request.headers:
         span.set_attribute("http.request.header.authorization", "[REDACTED]")
-    if "/api-token-auth" in request.url.path:
-        span.set_attribute("http.request.body", "[REDACTED: credential exchange]")
+
+
+async def scrub_auth_header_async(span: Span, request: RequestInfo) -> None:
+    """Adapt authorization redaction to the HTTPX async request-hook signature."""
+    scrub_auth_header(span, request)

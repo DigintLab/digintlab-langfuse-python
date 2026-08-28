@@ -16,13 +16,17 @@ jobs:
   python-ci:
     permissions:
       contents: read
-      pull-requests: write
-      security-events: write
-    uses: DigintLab/github/.github/workflows/python-ci.yml@python-ci-v0
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.13', '3.14']
+    uses: DigintLab/github/.github/workflows/python-ci.yml@e5faa44f33f1f621f43ab05f575c6a1f7a2872d8 # python-ci-v0.0.23
+    with:
+      python-version: ${{ matrix.python }}
 
   infra-scan:
     permissions:
       contents: read
       pull-requests: write
       security-events: write
-    uses: DigintLab/github/.github/workflows/infra-security-scan.yml@infra-scan-v0
+    uses: DigintLab/github/.github/workflows/infra-security-scan.yml@e5faa44f33f1f621f43ab05f575c6a1f7a2872d8 # infra-scan-v0.0.24

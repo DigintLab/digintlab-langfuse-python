@@ -3,24 +3,12 @@
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import Literal, Protocol, TypedDict
 
 from langfuse import Langfuse
 
+from digintlab_langfuse.json_values import JsonValue, to_json_value
 from digintlab_langfuse.timing import ElapsedTimer, elapsed_timer
-from digintlab_langfuse.types import JsonValue, to_json_value
-
-
-class ScoreDataType(StrEnum):
-    """Langfuse score data types."""
-
-    NUMERIC = "NUMERIC"
-    CATEGORICAL = "CATEGORICAL"
-    BOOLEAN = "BOOLEAN"
-    TEXT = "TEXT"
-    CORRECTION = "CORRECTION"
-
 
 type SDKNumericScoreDataType = Literal["NUMERIC", "BOOLEAN"]
 type SDKStringScoreDataType = Literal["CATEGORICAL", "TEXT", "CORRECTION"]
@@ -279,63 +267,3 @@ def score_current_trace[TValue: ScoreValue](lf: Langfuse, *, score: Score[TValue
 def score_current_span[TValue: ScoreValue](lf: Langfuse, *, score: Score[TValue]) -> None:
     """Attach a typed score to the active Langfuse span or generation."""
     score.score_current_span(lf)
-
-
-def emit_categorical_score(lf: Langfuse, run_id: str, name: str, value: str, *, trace_id: str | None = None) -> None:
-    """Emit a categorical score on a trace when available, otherwise on the session."""
-    emit_score(lf, score=CategoricalScore(name=name, value=value), target=ScoreTarget(run_id=run_id, trace_id=trace_id))
-
-
-def emit_numeric_score(lf: Langfuse, run_id: str, name: str, value: float, *, trace_id: str | None = None) -> None:
-    """Emit a numeric score on a trace when available, otherwise on the session."""
-    emit_score(lf, score=NumericScore(name=name, value=value), target=ScoreTarget(run_id=run_id, trace_id=trace_id))
-
-
-def emit_boolean_score(lf: Langfuse, run_id: str, name: str, value: bool, *, trace_id: str | None = None) -> None:
-    """Emit a Langfuse boolean score using Langfuse's 1.0/0.0 representation."""
-    emit_score(lf, score=BooleanScore(name=name, value=value), target=ScoreTarget(run_id=run_id, trace_id=trace_id))
-
-
-def emit_text_score(lf: Langfuse, run_id: str, name: str, value: str, *, trace_id: str | None = None) -> None:
-    """Emit a text score on a trace when available, otherwise on the session."""
-    emit_score(lf, score=TextScore(name=name, value=value), target=ScoreTarget(run_id=run_id, trace_id=trace_id))
-
-
-def score_current_trace_numeric(lf: Langfuse, name: str, value: float) -> None:
-    """Attach a numeric score to the trace active in the current context."""
-    score_current_trace(lf, score=NumericScore(name=name, value=value))
-
-
-def score_current_trace_categorical(lf: Langfuse, name: str, value: str) -> None:
-    """Attach a categorical score to the trace active in the current context."""
-    score_current_trace(lf, score=CategoricalScore(name=name, value=value))
-
-
-def score_current_trace_boolean(lf: Langfuse, name: str, value: bool) -> None:
-    """Attach a boolean score to the active Langfuse trace."""
-    score_current_trace(lf, score=BooleanScore(name=name, value=value))
-
-
-def score_current_trace_text(lf: Langfuse, name: str, value: str) -> None:
-    """Attach a text score to the active Langfuse trace."""
-    score_current_trace(lf, score=TextScore(name=name, value=value))
-
-
-def score_current_span_numeric(lf: Langfuse, name: str, value: float) -> None:
-    """Attach a numeric score to the active Langfuse span or generation."""
-    score_current_span(lf, score=NumericScore(name=name, value=value))
-
-
-def score_current_span_categorical(lf: Langfuse, name: str, value: str) -> None:
-    """Attach a categorical score to the active Langfuse span or generation."""
-    score_current_span(lf, score=CategoricalScore(name=name, value=value))
-
-
-def score_current_span_boolean(lf: Langfuse, name: str, value: bool) -> None:
-    """Attach a boolean score to the active Langfuse span or generation."""
-    score_current_span(lf, score=BooleanScore(name=name, value=value))
-
-
-def score_current_span_text(lf: Langfuse, name: str, value: str) -> None:
-    """Attach a text score to the active Langfuse span or generation."""
-    score_current_span(lf, score=TextScore(name=name, value=value))

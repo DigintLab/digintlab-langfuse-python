@@ -7,7 +7,7 @@ from typing import Literal, Protocol
 from langfuse import Langfuse
 from langfuse.model import ChatMessageDict, ChatMessageWithPlaceholdersDict, ChatPromptClient, TextPromptClient
 
-from digintlab_langfuse.types import JsonValue, to_json_value
+from digintlab_langfuse.json_values import JsonValue, to_json_value
 
 type ChatPromptMessage = ChatMessageDict
 type ChatPromptPart = ChatMessageDict | ChatMessageWithPlaceholdersDict

@@ -10,6 +10,9 @@ from opentelemetry import context as context_api
 from opentelemetry.sdk.trace import ReadableSpan, Span, TracerProvider
 from opentelemetry.sdk.trace.export import SpanProcessor
 
+SPAN_TIMING_OVERFLOW_KEY = "__overflow__"
+DEFAULT_MAX_SPAN_TIMING_BUCKETS = 1_000
+
 
 def _monotonic() -> float:
     return time.monotonic()
@@ -74,8 +77,17 @@ def _span_elapsed_seconds(span: ReadableSpan) -> float | None:
 class SpanTimingProcessor(SpanProcessor):
     """Collect elapsed-time buckets for ended OpenTelemetry spans."""
 
-    def __init__(self, *, key: Callable[[ReadableSpan], str] = default_span_timing_key) -> None:
+    def __init__(
+        self,
+        *,
+        key: Callable[[ReadableSpan], str] = default_span_timing_key,
+        max_buckets: int = DEFAULT_MAX_SPAN_TIMING_BUCKETS,
+    ) -> None:
+        if max_buckets < 1:
+            message = "Span timing max_buckets must be at least 1."
+            raise ValueError(message)
         self._key = key
+        self._max_buckets = max_buckets
         self._buckets: dict[str, SpanTimingBucket] = {}
         self._lock = Lock()
 
@@ -92,6 +104,8 @@ class SpanTimingProcessor(SpanProcessor):
             return
 
         with self._lock:
+            if key not in self._buckets and len(self._buckets) >= self._max_buckets:
+                key = SPAN_TIMING_OVERFLOW_KEY
             if key in self._buckets:
                 current = self._buckets[key]
                 self._buckets[key] = SpanTimingBucket(
@@ -150,9 +164,10 @@ def create_span_timing_recorder(
     *,
     key: Callable[[ReadableSpan], str] = default_span_timing_key,
     tracer_provider: TracerProvider | None = None,
+    max_buckets: int = DEFAULT_MAX_SPAN_TIMING_BUCKETS,
 ) -> SpanTimingRecorder:
     """Create or extend a tracer provider with a span timing processor."""
     provider = tracer_provider or TracerProvider()
-    processor = SpanTimingProcessor(key=key)
+    processor = SpanTimingProcessor(key=key, max_buckets=max_buckets)
     provider.add_span_processor(processor)
     return SpanTimingRecorder(tracer_provider=provider, processor=processor)

@@ -11,8 +11,9 @@ from uuid import UUID
 
 from langchain_core.callbacks import BaseCallbackHandler
 from langfuse import Langfuse, get_client
-from langfuse.types import TraceContext
+from langfuse.types import SpanLevel, TraceContext
 
+from digintlab_langfuse.json_values import JsonValue, to_json_value
 from digintlab_langfuse.spans import (
     OBSERVATION_STATUS_MESSAGE_MAX_CHARS,
     ObservationKind,
@@ -20,7 +21,6 @@ from digintlab_langfuse.spans import (
     active_parent_observation_id,
     current_trace_id,
 )
-from digintlab_langfuse.types import JsonValue, to_json_value
 
 if TYPE_CHECKING:
     from langfuse._client.span import LangfuseObservationWrapper
@@ -33,6 +33,12 @@ class ToolObservationResult(TypedDict, total=False):
 
     output: JsonValue
     level: ObservationLevel
+    status_message: str
+
+
+class _ToolObservationUpdate(TypedDict, total=False):
+    output: JsonValue
+    level: SpanLevel
     status_message: str
 
 
@@ -61,9 +67,9 @@ def _tool_status_message(summary: ToolObservationResult) -> str:
     message = output.get("message", "")
     error_text = error if isinstance(error, str) else "tool_error"
     message_text = message if isinstance(message, str) else ""
-    return (
-        f"{error_text}: {message_text}"[:OBSERVATION_STATUS_MESSAGE_MAX_CHARS] if message_text else error_text[:OBSERVATION_STATUS_MESSAGE_MAX_CHARS]
-    )
+    if not message_text:
+        return error_text[:OBSERVATION_STATUS_MESSAGE_MAX_CHARS]
+    return f"{error_text}: {message_text}"[:OBSERVATION_STATUS_MESSAGE_MAX_CHARS]
 
 
 class ToolSpanCallback(BaseCallbackHandler):
@@ -112,22 +118,21 @@ class ToolSpanCallback(BaseCallbackHandler):
         except Exception:
             logger.exception("Failed to resolve the current Langfuse observation")
             return
-        parent_id = active_parent_observation_id() or (current_observation_id if isinstance(current_observation_id, str) else None)
+        parent_id = active_parent_observation_id(lf) or (current_observation_id if isinstance(current_observation_id, str) else None)
         if not parent_id:
             return
-        trace_context = TraceContext(trace_id=trace_id, parent_span_id=parent_id)
-        tool_input: dict[str, JsonValue] = {"input": input_str}
-        if inputs is not None:
-            tool_input["inputs"] = self._json_value_converter(inputs)
-        tool_metadata: dict[str, JsonValue] = {
-            "run_id": str(run_id),
-            "parent_run_id": str(parent_run_id) if parent_run_id else "",
-            "tags": self._json_value_converter(tags or []),
-        }
-        if metadata:
-            tool_metadata["metadata"] = self._json_value_converter(metadata)
-
         try:
+            trace_context = TraceContext(trace_id=trace_id, parent_span_id=parent_id)
+            tool_input: dict[str, JsonValue] = {"input": input_str}
+            if inputs is not None:
+                tool_input["inputs"] = self._json_value_converter(inputs)
+            tool_metadata: dict[str, JsonValue] = {
+                "run_id": str(run_id),
+                "parent_run_id": str(parent_run_id) if parent_run_id else "",
+                "tags": self._json_value_converter(tags or []),
+            }
+            if metadata:
+                tool_metadata["metadata"] = self._json_value_converter(metadata)
             span = lf.start_observation(
                 trace_context=trace_context,
                 name=_tool_name(serialized, kwargs),
@@ -152,24 +157,13 @@ class ToolSpanCallback(BaseCallbackHandler):
             return
         try:
             summary = self._summarize_output(output)
-        except BaseException:
+        except BaseException as exc:
             self._end_tool_observation(span)
+            if isinstance(exc, Exception):
+                logger.exception("Failed to summarize Langfuse tool observation output")
+                return
             raise
-        level = summary.get("level")
-        status_message = summary.get("status_message")
-        try:
-            if level is None and status_message is None:
-                span.update(output=summary.get("output"))
-            elif level is None:
-                span.update(output=summary.get("output"), status_message=status_message)
-            elif status_message is None:
-                span.update(output=summary.get("output"), level=level.value)
-            else:
-                span.update(output=summary.get("output"), level=level.value, status_message=status_message)
-        except Exception:
-            logger.exception("Failed to update Langfuse tool observation")
-        finally:
-            self._end_tool_observation(span)
+        self._finish_tool_observation(span, summary, failure_message="Failed to update Langfuse tool observation")
 
     def on_tool_error(
         self,
@@ -190,10 +184,24 @@ class ToolSpanCallback(BaseCallbackHandler):
             "level": ObservationLevel.ERROR,
         }
         summary["status_message"] = _tool_status_message(summary)
+        self._finish_tool_observation(span, summary, failure_message="Failed to update Langfuse tool observation after tool error")
+
+    def _finish_tool_observation(
+        self,
+        span: "LangfuseObservationWrapper",
+        summary: ToolObservationResult,
+        *,
+        failure_message: str,
+    ) -> None:
+        update: _ToolObservationUpdate = {"output": summary.get("output")}
+        if "level" in summary:
+            update["level"] = summary["level"].value
+        if "status_message" in summary:
+            update["status_message"] = summary["status_message"]
         try:
-            span.update(output=summary["output"], level=summary["level"].value, status_message=summary["status_message"])
+            span.update(**update)
         except Exception:
-            logger.exception("Failed to update Langfuse tool observation after tool error")
+            logger.exception(failure_message)
         finally:
             self._end_tool_observation(span)
 
