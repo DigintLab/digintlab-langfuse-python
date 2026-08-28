@@ -12,7 +12,6 @@ updates:
         dependency-type: "production"
       digintlab-langfuse-python-dev:
         dependency-type: "development"
-
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
