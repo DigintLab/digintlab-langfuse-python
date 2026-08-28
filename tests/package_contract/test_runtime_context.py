@@ -27,6 +27,6 @@ def test_trace_runtime_context_exports_litellm_metadata() -> None:
         "trace_id": "trace-1",
         "run_id": "run-1",
         "session_id": "run-1",
-        "user_id": "analyst",
+        "trace_user_id": "analyst",
         "parent_observation_id": "obs-1",
     }

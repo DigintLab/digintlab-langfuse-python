@@ -12,7 +12,7 @@ tasks:
   install:
     desc: Install Python dependencies
     cmds:
-      - uv sync --group dev
+      - uv sync --group dev --extra redaction
 
   format:
     desc: Format repository code
@@ -43,9 +43,21 @@ tasks:
     desc: Run all tests
     aliases: [tests]
     cmds:
-      - uv run pytest --max-warnings=0
+      - uv run pytest -m "not e2e" --max-warnings=0 --cov=digintlab_langfuse --cov-report=term-missing
 
   test-verbose:
     desc: Run all tests with verbose output
     cmds:
-      - uv run pytest -v --max-warnings=0
+      - uv run pytest -m "not e2e" -v --max-warnings=0 --cov=digintlab_langfuse --cov-report=term-missing
+
+  test-e2e:
+    desc: Run authenticated tests against the configured dedicated Langfuse project
+    env:
+      RUN_LANGFUSE_E2E: "1"
+    cmds:
+      - uv run pytest -m e2e --max-warnings=1 tests/e2e/
+
+  build:
+    desc: Build wheel and source distribution
+    cmds:
+      - uv build --no-build-isolation

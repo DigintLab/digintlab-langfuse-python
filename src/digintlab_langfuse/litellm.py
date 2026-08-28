@@ -1,15 +1,17 @@
 """Helpers that add Langfuse trace fields to LiteLLM proxy request kwargs."""
 
+import logging
 from collections.abc import Callable
 from typing import Protocol
 
 from langfuse import get_client
 
+from digintlab_langfuse.json_values import JsonValue
 from digintlab_langfuse.spans import TraceRuntimeContext, active_parent_observation_id
-from digintlab_langfuse.types import JsonValue
 
 type LiteLLMParamValue = JsonValue
 LITELLM_EXTRA_BODY_TYPE_ERROR = "LiteLLM proxy extra_body must be a JSON object"
+logger = logging.getLogger(__name__)
 
 
 class LangfuseTraceClient(Protocol):
@@ -57,7 +59,8 @@ def _trace_context_from_client(
     if not trace_id:
         return None
 
-    raw_observation_id = (active_parent_getter or active_parent_observation_id)() or client.get_current_observation_id()
+    active_parent_id = active_parent_getter() if active_parent_getter is not None else active_parent_observation_id(client)
+    raw_observation_id = active_parent_id or client.get_current_observation_id()
     parent_observation_id = raw_observation_id if isinstance(raw_observation_id, str) and raw_observation_id else None
     return TraceRuntimeContext(trace_id=str(trace_id), parent_observation_id=parent_observation_id)
 
@@ -78,7 +81,11 @@ def with_litellm_proxy_trace_metadata(
     """
     runtime_context = trace_context
     if runtime_context is None:
-        runtime_context = _trace_context_from_client((client_getter or get_client)(), active_parent_getter=active_parent_getter)
+        try:
+            runtime_context = _trace_context_from_client((client_getter or get_client)(), active_parent_getter=active_parent_getter)
+        except Exception:
+            logger.exception("Failed to resolve Langfuse context for LiteLLM metadata")
+            return kwargs
     if runtime_context is None:
         return kwargs
 

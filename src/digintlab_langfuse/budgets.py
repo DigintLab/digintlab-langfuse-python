@@ -1,9 +1,10 @@
 """Generic numeric budget checks for observed runtime, cost, and quality measurements."""
 
+import math
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 
-from digintlab_langfuse.types import JsonValue
+from digintlab_langfuse.json_values import JsonValue
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,7 +27,11 @@ def _numeric_value(value: JsonValue, *, name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, int | float):
         message = f"Budget ceiling {name!r} must be a number."
         raise TypeError(message)
-    return float(value)
+    numeric = float(value)
+    if not math.isfinite(numeric):
+        message = f"Budget value {name!r} must be finite."
+        raise ValueError(message)
+    return numeric
 
 
 def validate_numeric_budget_ceilings(
@@ -51,10 +56,11 @@ def check_numeric_budgets(
     """Return missing or exceeded numeric budget violations."""
     violations: list[NumericBudgetViolation] = []
     for name, ceiling in ceilings.items():
+        validated_ceiling = _numeric_value(ceiling, name=name)
         if name not in measurements:
-            violations.append(NumericBudgetViolation(name=name, ceiling=ceiling))
+            violations.append(NumericBudgetViolation(name=name, ceiling=validated_ceiling))
             continue
-        observed = measurements[name]
-        if observed > ceiling:
-            violations.append(NumericBudgetViolation(name=name, ceiling=ceiling, observed=observed))
+        observed = _numeric_value(measurements[name], name=name)
+        if observed > validated_ceiling:
+            violations.append(NumericBudgetViolation(name=name, ceiling=validated_ceiling, observed=observed))
     return tuple(violations)

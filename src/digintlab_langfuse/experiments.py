@@ -7,7 +7,7 @@ from langfuse import Langfuse
 from langfuse.api import Dataset, DatasetItem, DatasetStatus
 from langfuse.experiment import EvaluatorFunction, ExperimentResult, LocalExperimentItem, RunEvaluatorFunction, TaskFunction
 
-from digintlab_langfuse.types import JsonValue, to_json_value
+from digintlab_langfuse.json_values import JsonValue, to_json_value
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,6 +22,26 @@ class DatasetConfig:
 
 
 type ExperimentItem = LocalExperimentItem
+
+
+def _normalize_experiment_item(item: ExperimentItem) -> LocalExperimentItem:
+    normalized: LocalExperimentItem = {}
+    if "input" in item:
+        normalized["input"] = to_json_value(item["input"])
+    if "expected_output" in item:
+        normalized["expected_output"] = to_json_value(item["expected_output"])
+    if "metadata" not in item:
+        return normalized
+
+    match item["metadata"]:
+        case None:
+            normalized["metadata"] = None
+        case Mapping() as metadata:
+            normalized["metadata"] = {str(key): to_json_value(value) for key, value in metadata.items()}
+        case _:
+            message = "Experiment item metadata must be a mapping or None."
+            raise TypeError(message)
+    return normalized
 
 
 def create_dataset(lf: Langfuse, config: DatasetConfig) -> Dataset:
@@ -74,29 +94,11 @@ def run_local_experiment(
     metadata: dict[str, str] | None = None,
 ) -> ExperimentResult:
     """Run a Langfuse experiment over local in-memory items."""
-    normalized_data: list[LocalExperimentItem] = []
-    for item in data:
-        normalized_item: LocalExperimentItem = {}
-        if "input" in item:
-            normalized_item["input"] = to_json_value(item["input"])
-        if "expected_output" in item:
-            normalized_item["expected_output"] = to_json_value(item["expected_output"])
-        if "metadata" in item:
-            metadata_value = item["metadata"]
-            match metadata_value:
-                case None:
-                    normalized_item["metadata"] = None
-                case Mapping():
-                    normalized_item["metadata"] = {str(key): to_json_value(value) for key, value in metadata_value.items()}
-                case _:
-                    msg = "Experiment item metadata must be a mapping or None."
-                    raise TypeError(msg)
-        normalized_data.append(normalized_item)
     return lf.run_experiment(
         name=name,
         run_name=run_name,
         description=description,
-        data=normalized_data,
+        data=[_normalize_experiment_item(item) for item in data],
         task=task,
         evaluators=list(evaluators),
         run_evaluators=list(run_evaluators),

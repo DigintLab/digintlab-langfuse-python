@@ -5,24 +5,30 @@ import asyncio
 from pathlib import Path
 from typing import assert_type
 from unittest.mock import MagicMock, patch
+from uuid import uuid4
 
+import httpx
 import pytest
 from langfuse import Langfuse
 from langfuse.api.commons.types import ObservationLevel
 from langfuse.model import ChatPromptClient, TextPromptClient
+from opentelemetry.instrumentation.httpx import RequestInfo
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 import digintlab_langfuse
+from digintlab_langfuse import client as client_module
+from digintlab_langfuse import scores as scores_module
 from digintlab_langfuse.budgets import NumericBudgetViolation, check_numeric_budgets, validate_numeric_budget_ceilings
 from digintlab_langfuse.callbacks import ToolObservationResult, ToolSpanCallback
-from digintlab_langfuse.client import LangfuseClientConfig, LangfuseTelemetry, init_langfuse_client
+from digintlab_langfuse.client import LangfuseClientConfig, LangfuseTelemetry, _init_langfuse_client, init_langfuse_telemetry
 from digintlab_langfuse.experiments import (
     DatasetConfig,
     create_dataset,
     create_dataset_item,
     run_local_experiment,
 )
+from digintlab_langfuse.json_values import JsonValue
 from digintlab_langfuse.litellm import with_litellm_proxy_trace_metadata
 from digintlab_langfuse.prompts import (
     ChatPromptRequest,
@@ -31,76 +37,29 @@ from digintlab_langfuse.prompts import (
     create_or_update_prompt,
     get_prompt,
 )
+from digintlab_langfuse.redaction import SensitiveDataRedactionConfig
 from digintlab_langfuse.scores import BooleanScore, NumericScore, ScoreTarget, emit_score, score_elapsed
-from digintlab_langfuse.spans import ObservationKind, emit_guardrail_observation, observe_generation, observe_node_span, scrub_auth_header
+from digintlab_langfuse.spans import (
+    ObservationKind,
+    TraceRuntimeContext,
+    active_parent_observation_id,
+    emit_guardrail_observation,
+    observe_generation,
+    observe_node_span,
+    scrub_auth_header,
+    scrub_auth_header_async,
+    trace_runtime_context,
+)
 from digintlab_langfuse.timing import SpanTimingProcessor, create_span_timing_recorder, elapsed_timer
-from digintlab_langfuse.types import JsonValue
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[2] / "src" / "digintlab_langfuse"
 EXPECTED_ROOT_EXPORTS = [
-    "LANGFUSE_DEFAULT_BASE_URL",
-    "ChatManagedPrompt",
-    "ChatPromptRequest",
-    "DatasetConfig",
-    "ElapsedTimer",
     "LangfuseClientConfig",
     "LangfuseTelemetry",
-    "ManagedPrompt",
-    "NumericBudgetViolation",
     "ObservationKind",
-    "PromptKind",
-    "PromptRequest",
-    "BooleanScore",
-    "CategoricalScore",
-    "CorrectionScore",
-    "NumericScore",
-    "Score",
-    "ScoreDataType",
-    "ScoreTarget",
-    "SpanTimingBucket",
-    "SpanTimingProcessor",
-    "SpanTimingRecorder",
-    "TextManagedPrompt",
-    "TextPromptRequest",
-    "TextScore",
-    "ToolObservationResult",
-    "ToolSpanCallback",
-    "active_parent_observation_id",
-    "check_numeric_budgets",
-    "create_dataset",
-    "create_dataset_item",
-    "create_or_update_prompt",
-    "create_span_timing_recorder",
-    "current_trace_id",
-    "default_span_timing_key",
-    "emit_boolean_score",
-    "emit_categorical_score",
-    "emit_guardrail_observation",
-    "emit_numeric_score",
-    "emit_score",
-    "emit_text_score",
-    "elapsed_timer",
-    "get_prompt",
-    "init_langfuse_client",
+    "SensitiveDataRedactionConfig",
+    "TraceRuntimeContext",
     "init_langfuse_telemetry",
-    "langchain_prompt_metadata",
-    "observe_generation",
-    "observe_node_span",
-    "run_local_experiment",
-    "score_current_span",
-    "score_current_span_boolean",
-    "score_current_span_categorical",
-    "score_current_span_numeric",
-    "score_current_span_text",
-    "score_current_trace",
-    "score_current_trace_boolean",
-    "score_current_trace_categorical",
-    "score_current_trace_numeric",
-    "score_current_trace_text",
-    "score_elapsed",
-    "shutdown_langfuse_client",
-    "validate_numeric_budget_ceilings",
-    "with_litellm_proxy_trace_metadata",
 ]
 
 
@@ -121,20 +80,16 @@ def test_package_does_not_import_other_local_packages() -> None:
 
 def test_root_exports_only_public_library_surface() -> None:
     assert set(digintlab_langfuse.__all__) == set(EXPECTED_ROOT_EXPORTS)
+    assert set(client_module.__all__) == {"LangfuseClientConfig", "LangfuseTelemetry", "init_langfuse_telemetry"}
 
 
-def test_root_reexports_observability_helpers() -> None:
-    assert digintlab_langfuse.ToolObservationResult is ToolObservationResult
-    assert digintlab_langfuse.ToolSpanCallback is ToolSpanCallback
-    assert digintlab_langfuse.NumericBudgetViolation is NumericBudgetViolation
-    assert digintlab_langfuse.check_numeric_budgets is check_numeric_budgets
-    assert digintlab_langfuse.validate_numeric_budget_ceilings is validate_numeric_budget_ceilings
+def test_root_reexports_primary_telemetry_api() -> None:
+    assert digintlab_langfuse.LangfuseClientConfig is LangfuseClientConfig
+    assert digintlab_langfuse.LangfuseTelemetry is LangfuseTelemetry
     assert digintlab_langfuse.ObservationKind is ObservationKind
-    assert digintlab_langfuse.emit_guardrail_observation is emit_guardrail_observation
-    assert digintlab_langfuse.observe_node_span is observe_node_span
-    assert digintlab_langfuse.with_litellm_proxy_trace_metadata is with_litellm_proxy_trace_metadata
-    assert digintlab_langfuse.create_span_timing_recorder is create_span_timing_recorder
-    assert digintlab_langfuse.score_elapsed is score_elapsed
+    assert digintlab_langfuse.SensitiveDataRedactionConfig is SensitiveDataRedactionConfig
+    assert digintlab_langfuse.TraceRuntimeContext is TraceRuntimeContext
+    assert digintlab_langfuse.init_langfuse_telemetry is init_langfuse_telemetry
 
 
 def test_validate_numeric_budget_ceilings_rejects_unknown_names() -> None:
@@ -166,7 +121,7 @@ def test_client_config_forwards_langfuse_runtime_options() -> None:
         return True
 
     config = LangfuseClientConfig(
-        public_key="pk",
+        public_key="pk-config",
         secret_key="sk",
         base_url="https://langfuse.example",
         timeout=12,
@@ -180,10 +135,10 @@ def test_client_config_forwards_langfuse_runtime_options() -> None:
     )
 
     with patch("digintlab_langfuse.client.Langfuse") as langfuse_cls:
-        init_langfuse_client(config)
+        _init_langfuse_client(config)
 
     langfuse_cls.assert_called_once_with(
-        public_key="pk",
+        public_key="pk-config",
         secret_key="sk",
         base_url="https://langfuse.example",
         timeout=12,
@@ -202,34 +157,85 @@ def test_client_config_forwards_langfuse_runtime_options() -> None:
     )
 
 
-def test_httpx_auth_redaction_can_be_disabled_by_applications() -> None:
+def test_httpx_auth_redaction_is_disabled_by_default() -> None:
     client = MagicMock()
-    with patch("digintlab_langfuse.client.HTTPXClientInstrumentor") as httpx_cls:
+    with patch("digintlab_langfuse._instrumentation.HTTPXClientInstrumentor") as httpx_cls:
+        httpx_cls.return_value.is_instrumented_by_opentelemetry = False
         telemetry = LangfuseTelemetry(
             client,
             public_key="pk",
             instrument_httpx=True,
             instrument_botocore=False,
-            redact_http_auth_headers=False,
         )
         telemetry.instrument()
+        telemetry.uninstrument()
 
     httpx_cls.return_value.instrument.assert_called_once_with()
 
 
-def test_init_instruments_selected_project_hooks() -> None:
-    from digintlab_langfuse.client import init_langfuse_telemetry
+def test_httpx_auth_redaction_covers_sync_and_async_clients_when_enabled() -> None:
+    client = MagicMock()
+    with patch("digintlab_langfuse._instrumentation.HTTPXClientInstrumentor") as httpx_cls:
+        httpx_cls.return_value.is_instrumented_by_opentelemetry = False
+        telemetry = LangfuseTelemetry(
+            client,
+            public_key="pk",
+            instrument_httpx=True,
+            instrument_botocore=False,
+            redact_http_auth_headers=True,
+        )
+        telemetry.instrument()
+        telemetry.uninstrument()
 
+    httpx_cls.return_value.instrument.assert_called_once_with(
+        request_hook=scrub_auth_header,
+        async_request_hook=scrub_auth_header_async,
+    )
+
+
+@pytest.mark.asyncio
+async def test_httpx_auth_redaction_accepts_instrumentor_request_info() -> None:
+    span = MagicMock()
+    span.is_recording.return_value = True
+    request = RequestInfo(
+        method=b"GET",
+        url=httpx.URL("https://example.test"),
+        headers=httpx.Headers({"Authorization": "Bearer secret"}),
+        stream=None,
+        extensions={},
+    )
+
+    scrub_auth_header(span, request)
+    await scrub_auth_header_async(span, request)
+
+    assert span.set_attribute.call_count == 2
+    span.set_attribute.assert_called_with("http.request.header.authorization", "[REDACTED]")
+
+    request_without_headers = RequestInfo(
+        method=b"GET",
+        url=httpx.URL("https://example.test"),
+        headers=None,
+        stream=None,
+        extensions={},
+    )
+    scrub_auth_header(span, request_without_headers)
+
+
+def test_init_instruments_selected_project_hooks() -> None:
     client = MagicMock()
     with (
-        patch("digintlab_langfuse.client.init_langfuse_client", return_value=client),
-        patch("digintlab_langfuse.client.HTTPXClientInstrumentor") as httpx_instrumentor,
-        patch("digintlab_langfuse.client.BotocoreInstrumentor") as botocore_instrumentor,
+        patch("digintlab_langfuse.client._init_langfuse_client", return_value=client),
+        patch("digintlab_langfuse._instrumentation.HTTPXClientInstrumentor") as httpx_instrumentor,
+        patch("digintlab_langfuse._instrumentation.BotocoreInstrumentor") as botocore_instrumentor,
     ):
+        httpx_instrumentor.return_value.is_instrumented_by_opentelemetry = False
+        botocore_instrumentor.return_value.is_instrumented_by_opentelemetry = False
         telemetry = init_langfuse_telemetry(
-            LangfuseClientConfig(public_key="pk", secret_key="sk"),
+            LangfuseClientConfig(public_key="pk-init", secret_key="sk"),
+            instrument_httpx=True,
             instrument_botocore=True,
         )
+        telemetry.uninstrument()
 
     assert telemetry.client is client
     httpx_instrumentor.return_value.instrument.assert_called_once()
@@ -237,21 +243,32 @@ def test_init_instruments_selected_project_hooks() -> None:
 
 
 def test_configured_tracer_provider_reaches_process_instrumentors() -> None:
-    from digintlab_langfuse.client import init_langfuse_telemetry
-
     client = MagicMock()
     tracer_provider = TracerProvider()
     with (
-        patch("digintlab_langfuse.client.init_langfuse_client", return_value=client),
-        patch("digintlab_langfuse.client.HTTPXClientInstrumentor") as httpx_instrumentor,
-        patch("digintlab_langfuse.client.BotocoreInstrumentor") as botocore_instrumentor,
+        patch("digintlab_langfuse.client._init_langfuse_client", return_value=client),
+        patch("digintlab_langfuse._instrumentation.HTTPXClientInstrumentor") as httpx_instrumentor,
+        patch("digintlab_langfuse._instrumentation.BotocoreInstrumentor") as botocore_instrumentor,
     ):
-        init_langfuse_telemetry(
-            LangfuseClientConfig(public_key="pk", secret_key="sk", tracer_provider=tracer_provider),
+        httpx_instrumentor.return_value.is_instrumented_by_opentelemetry = False
+        botocore_instrumentor.return_value.is_instrumented_by_opentelemetry = False
+        telemetry = init_langfuse_telemetry(
+            LangfuseClientConfig(
+                public_key="pk-tracer",
+                secret_key="sk",
+                tracer_provider=tracer_provider,
+                redact_http_auth_headers=True,
+            ),
+            instrument_httpx=True,
             instrument_botocore=True,
         )
+        telemetry.uninstrument()
 
-    httpx_instrumentor.return_value.instrument.assert_called_once_with(request_hook=scrub_auth_header, tracer_provider=tracer_provider)
+    httpx_instrumentor.return_value.instrument.assert_called_once_with(
+        request_hook=scrub_auth_header,
+        async_request_hook=scrub_auth_header_async,
+        tracer_provider=tracer_provider,
+    )
     botocore_instrumentor.return_value.instrument.assert_called_once_with(tracer_provider=tracer_provider)
 
 
@@ -395,10 +412,16 @@ def test_telemetry_exposes_bound_runtime_helpers() -> None:
     callback = telemetry.tool_span_callback()
     assert isinstance(callback, ToolSpanCallback)
 
-    with patch("digintlab_langfuse.client.current_langfuse_trace_id", return_value="trace-1") as current_trace_id:
-        assert telemetry.current_trace_id() == "trace-1"
+    with patch("digintlab_langfuse.client.capture_trace_runtime_context", return_value=None) as runtime_context:
+        assert telemetry.trace_runtime_context(run_id="run-1", metadata={"tenant": "acme"}) is None
 
-    current_trace_id.assert_called_once_with(client)
+    runtime_context.assert_called_once_with(
+        client,
+        session_id=None,
+        user_id=None,
+        run_id="run-1",
+        metadata={"tenant": "acme"},
+    )
 
     with patch("digintlab_langfuse.client.observe_node_span") as node_span:
         telemetry.observe_node_span("graph_node", enabled=True, kind=ObservationKind.AGENT)
@@ -562,8 +585,6 @@ def _current_observation_context(mock_lf: MagicMock, span: MagicMock) -> MagicMo
 
 
 def test_observe_node_span_creates_span_for_graph_node() -> None:
-    from digintlab_langfuse.spans import observe_node_span
-
     mock_span = MagicMock()
     mock_span.id = "span-123"
     mock_lf = MagicMock()
@@ -577,9 +598,8 @@ def test_observe_node_span_creates_span_for_graph_node() -> None:
     context.__exit__.assert_called_once()
 
 
-def test_observe_node_span_uses_explicit_kind() -> None:
-    from digintlab_langfuse.spans import ObservationKind, observe_node_span
-
+@pytest.mark.parametrize("kind", list(ObservationKind))
+def test_observe_node_span_uses_explicit_kind(kind: ObservationKind) -> None:
     mock_span = MagicMock()
     mock_span.id = "span-123"
     mock_lf = MagicMock()
@@ -591,17 +611,15 @@ def test_observe_node_span_uses_explicit_kind() -> None:
         observe_node_span(
             "judge_validate",
             enabled=True,
-            kind=ObservationKind.EVALUATOR,
+            kind=kind,
         ),
     ):
         pass
 
-    mock_lf.start_as_current_observation.assert_called_once_with(name="judge_validate", as_type="evaluator")
+    mock_lf.start_as_current_observation.assert_called_once_with(name="judge_validate", as_type=kind.value)
 
 
 def test_guardrail_observation_uses_active_node_as_parent() -> None:
-    from digintlab_langfuse.spans import emit_guardrail_observation, observe_node_span
-
     node_span = MagicMock()
     node_span.id = "node-span-123"
     guardrail_span = MagicMock()
@@ -677,8 +695,6 @@ async def test_guardrail_observation_is_noop_after_node_closes_in_copied_context
 
 
 def test_observe_node_span_disabled_is_noop() -> None:
-    from digintlab_langfuse.spans import observe_node_span
-
     mock_lf = MagicMock()
 
     with patch("digintlab_langfuse.spans.get_client", return_value=mock_lf), observe_node_span("triage", enabled=False):
@@ -688,8 +704,6 @@ def test_observe_node_span_disabled_is_noop() -> None:
 
 
 def test_observe_node_span_without_active_trace_is_noop() -> None:
-    from digintlab_langfuse.spans import observe_node_span
-
     mock_lf = MagicMock()
     mock_lf.get_current_trace_id.return_value = None
 
@@ -700,8 +714,6 @@ def test_observe_node_span_without_active_trace_is_noop() -> None:
 
 
 def test_observe_node_span_with_malformed_trace_id_is_noop() -> None:
-    from digintlab_langfuse.spans import observe_node_span
-
     mock_lf = MagicMock()
     mock_lf.get_current_trace_id.return_value = 123
 
@@ -712,8 +724,6 @@ def test_observe_node_span_with_malformed_trace_id_is_noop() -> None:
 
 
 def test_observe_node_span_marks_error_level_on_exception() -> None:
-    from digintlab_langfuse.spans import observe_node_span
-
     mock_span = MagicMock()
     mock_span.id = "span-123"
     mock_lf = MagicMock()
@@ -792,8 +802,6 @@ def test_guardrail_observation_logs_start_and_end_failures() -> None:
 
 
 def test_observe_node_span_sets_active_parent_observation_id_while_open() -> None:
-    from digintlab_langfuse.spans import active_parent_observation_id, observe_node_span
-
     mock_span = MagicMock()
     mock_span.id = "node-span-123"
     mock_lf = MagicMock()
@@ -807,8 +815,6 @@ def test_observe_node_span_sets_active_parent_observation_id_while_open() -> Non
 
 
 def test_active_parent_observation_id_ignores_malformed_sdk_id() -> None:
-    from digintlab_langfuse.spans import active_parent_observation_id, observe_node_span
-
     mock_span = MagicMock()
     mock_span.id = 123
     mock_lf = MagicMock()
@@ -819,13 +825,41 @@ def test_active_parent_observation_id_ignores_malformed_sdk_id() -> None:
         assert active_parent_observation_id() is None
 
 
+def test_active_parent_observation_is_scoped_to_owning_client() -> None:
+    owner_span = MagicMock()
+    owner_span.id = "owner-node"
+    owner = MagicMock()
+    owner.get_current_trace_id.return_value = "owner-trace"
+    _current_observation_context(owner, owner_span)
+
+    other = MagicMock()
+    other.get_current_trace_id.return_value = "other-trace"
+    other.get_current_observation_id.return_value = "other-parent"
+
+    with observe_node_span("node", enabled=True, client_getter=lambda: owner):
+        assert active_parent_observation_id(owner) == "owner-node"
+        assert active_parent_observation_id(other) is None
+        runtime_context = trace_runtime_context(other)
+        assert runtime_context is not None
+        assert runtime_context.parent_observation_id == "other-parent"
+
+        proxy_kwargs = with_litellm_proxy_trace_metadata({}, client_getter=lambda: other)
+        extra_body = proxy_kwargs["extra_body"]
+        assert isinstance(extra_body, dict)
+        metadata = extra_body["metadata"]
+        assert isinstance(metadata, dict)
+        assert metadata["parent_observation_id"] == "other-parent"
+
+        callback = ToolSpanCallback(client_getter=lambda: other)
+        callback.on_tool_start({"name": "tool"}, "input", run_id=uuid4())
+        assert other.start_observation.call_args.kwargs["trace_context"] == {
+            "trace_id": "other-trace",
+            "parent_span_id": "other-parent",
+        }
+
+
 @pytest.mark.asyncio
 async def test_active_parent_observation_propagates_to_created_task() -> None:
-    import asyncio
-
-    from digintlab_langfuse.litellm import with_litellm_proxy_trace_metadata
-    from digintlab_langfuse.spans import observe_node_span
-
     mock_span = MagicMock()
     mock_span.id = "node-span-123"
     mock_lf = MagicMock()
@@ -897,7 +931,6 @@ def _extra_body_metadata(result: dict[str, JsonValue]) -> dict[str, JsonValue]:
 
 
 def test_litellm_proxy_trace_metadata_uses_only_extra_body() -> None:
-    from digintlab_langfuse.litellm import with_litellm_proxy_trace_metadata
 
     fake_lf = MagicMock()
     fake_lf.get_current_trace_id.return_value = "trace-123"
@@ -915,7 +948,6 @@ def test_litellm_proxy_trace_metadata_uses_only_extra_body() -> None:
 
 
 def test_litellm_proxy_trace_metadata_prefers_active_node_parent_observation() -> None:
-    from digintlab_langfuse.litellm import with_litellm_proxy_trace_metadata
 
     fake_lf = MagicMock()
     fake_lf.get_current_trace_id.return_value = "trace-123"
@@ -927,7 +959,6 @@ def test_litellm_proxy_trace_metadata_prefers_active_node_parent_observation() -
 
 
 def test_litellm_proxy_trace_metadata_uses_run_id_as_session_id() -> None:
-    from digintlab_langfuse.litellm import with_litellm_proxy_trace_metadata
 
     fake_lf = MagicMock()
     fake_lf.get_current_trace_id.return_value = "trace-123"
@@ -940,7 +971,6 @@ def test_litellm_proxy_trace_metadata_uses_run_id_as_session_id() -> None:
 
 
 def test_litellm_proxy_trace_metadata_reads_run_manager_metadata() -> None:
-    from digintlab_langfuse.litellm import with_litellm_proxy_trace_metadata
 
     fake_lf = MagicMock()
     fake_lf.get_current_trace_id.return_value = "trace-123"
@@ -960,7 +990,6 @@ def test_litellm_proxy_trace_metadata_reads_run_manager_metadata() -> None:
 
 
 def test_litellm_proxy_trace_metadata_preserves_extra_body_metadata() -> None:
-    from digintlab_langfuse.litellm import with_litellm_proxy_trace_metadata
 
     fake_lf = MagicMock()
     fake_lf.get_current_trace_id.return_value = "trace-123"
@@ -981,7 +1010,6 @@ def test_litellm_proxy_trace_metadata_preserves_extra_body_metadata() -> None:
 
 
 def test_litellm_proxy_trace_metadata_leaves_kwargs_unchanged_without_active_trace() -> None:
-    from digintlab_langfuse.litellm import with_litellm_proxy_trace_metadata
 
     fake_lf = MagicMock()
     fake_lf.get_current_trace_id.return_value = None
@@ -993,7 +1021,6 @@ def test_litellm_proxy_trace_metadata_leaves_kwargs_unchanged_without_active_tra
 
 
 def test_litellm_proxy_trace_metadata_rejects_non_object_extra_body() -> None:
-    from digintlab_langfuse.litellm import with_litellm_proxy_trace_metadata
 
     fake_lf = MagicMock()
     fake_lf.get_current_trace_id.return_value = "trace-123"
@@ -1004,10 +1031,6 @@ def test_litellm_proxy_trace_metadata_rejects_non_object_extra_body() -> None:
 
 
 def test_tool_span_callback_emits_default_tool_observation() -> None:
-    from uuid import uuid4
-
-    from digintlab_langfuse.callbacks import ToolSpanCallback
-
     tool_span = MagicMock()
     tool_span.id = "tool-span-123"
     mock_lf = MagicMock()
@@ -1034,11 +1057,47 @@ def test_tool_span_callback_emits_default_tool_observation() -> None:
     tool_span.end.assert_called_once()
 
 
+@pytest.mark.parametrize(
+    ("summary", "expected_update"),
+    [
+        pytest.param({"output": {"ok": True}}, {"output": {"ok": True}}, id="output"),
+        pytest.param(
+            {"output": {"ok": True}, "level": ObservationLevel.WARNING},
+            {"output": {"ok": True}, "level": "WARNING"},
+            id="level",
+        ),
+        pytest.param(
+            {"output": {"ok": True}, "status_message": "completed"},
+            {"output": {"ok": True}, "status_message": "completed"},
+            id="status-message",
+        ),
+        pytest.param(
+            {"output": {"ok": True}, "level": ObservationLevel.WARNING, "status_message": "completed"},
+            {"output": {"ok": True}, "level": "WARNING", "status_message": "completed"},
+            id="level-and-status-message",
+        ),
+    ],
+)
+def test_tool_span_callback_forwards_present_summary_fields(
+    summary: ToolObservationResult,
+    expected_update: dict[str, object],
+) -> None:
+    tool_span = MagicMock()
+    mock_lf = MagicMock()
+    mock_lf.get_current_trace_id.return_value = "trace-123"
+    mock_lf.get_current_observation_id.return_value = "parent-span"
+    mock_lf.start_observation.return_value = tool_span
+    callback = ToolSpanCallback(client_getter=lambda: mock_lf, summarize_output=lambda _output: summary)
+    run_id = uuid4()
+
+    callback.on_tool_start({"name": "query"}, "{}", run_id=run_id)
+    callback.on_tool_end("result", run_id=run_id)
+
+    tool_span.update.assert_called_once_with(**expected_update)
+    tool_span.end.assert_called_once_with()
+
+
 def test_tool_span_callback_does_not_create_a_logical_root_without_a_parent() -> None:
-    from uuid import uuid4
-
-    from digintlab_langfuse.callbacks import ToolSpanCallback
-
     mock_lf = MagicMock()
     mock_lf.get_current_trace_id.return_value = "trace-123"
     mock_lf.get_current_observation_id.return_value = None
@@ -1050,10 +1109,6 @@ def test_tool_span_callback_does_not_create_a_logical_root_without_a_parent() ->
 
 
 def test_tool_span_callback_marks_tool_error_event() -> None:
-    from uuid import uuid4
-
-    from digintlab_langfuse.callbacks import ToolSpanCallback
-
     tool_span = MagicMock()
     tool_span.id = "tool-span-123"
     mock_lf = MagicMock()
@@ -1075,8 +1130,6 @@ def test_tool_span_callback_marks_tool_error_event() -> None:
 
 
 def test_tool_span_callback_logs_start_failure() -> None:
-    from uuid import uuid4
-
     mock_lf = MagicMock()
     mock_lf.get_current_trace_id.return_value = "trace-123"
     mock_lf.get_current_observation_id.return_value = "parent-span"
@@ -1090,8 +1143,6 @@ def test_tool_span_callback_logs_start_failure() -> None:
 
 
 def test_tool_span_callback_logs_current_observation_lookup_failure() -> None:
-    from uuid import uuid4
-
     mock_lf = MagicMock()
     mock_lf.get_current_trace_id.return_value = "trace-123"
     mock_lf.get_current_observation_id.side_effect = RuntimeError("telemetry lookup failed")
@@ -1105,8 +1156,6 @@ def test_tool_span_callback_logs_current_observation_lookup_failure() -> None:
 
 
 def test_tool_span_callback_logs_update_and_end_failures() -> None:
-    from uuid import uuid4
-
     tool_span = MagicMock()
     tool_span.update.side_effect = RuntimeError("telemetry update failed")
     tool_span.end.side_effect = RuntimeError("telemetry end failed")
@@ -1154,45 +1203,13 @@ def test_emit_score_supports_boolean_text_and_metadata() -> None:
     )
 
 
-def test_langfuse_telemetry_exposes_bound_score_helpers() -> None:
-    client = MagicMock()
-    telemetry = LangfuseTelemetry(client, public_key="pk-test", instrument_httpx=False, instrument_botocore=False)
-
-    telemetry.emit_numeric_score("latency_seconds", 1.25, run_id="run-1", trace_id="trace-1")
-
-    client.create_score.assert_called_once_with(
-        name="latency_seconds",
-        value=1.25,
-        data_type="NUMERIC",
-        trace_id="trace-1",
-        metadata={"run_id": "run-1", "session_id": "run-1"},
-    )
-
-    client.reset_mock()
-    telemetry.emit_score(score=BooleanScore(name="policy_passed", value=False), target=ScoreTarget(run_id="run-2"))
-
-    client.create_score.assert_called_once_with(
-        name="policy_passed",
-        value=0.0,
-        data_type="BOOLEAN",
-        session_id="run-2",
-        metadata={"run_id": "run-2", "session_id": "run-2"},
-    )
-
-    client.reset_mock()
-    telemetry.score_current_trace_numeric("confidence", 0.91)
-    telemetry.score_current_span_boolean("valid", False)
-
-    client.score_current_trace.assert_called_once_with(name="confidence", value=0.91, data_type="NUMERIC")
-    client.score_current_span.assert_called_once_with(name="valid", value=0.0, data_type="BOOLEAN")
-
-
-def test_langfuse_telemetry_keeps_typed_score_escape_hatch() -> None:
+def test_langfuse_telemetry_exposes_only_typed_score_operations() -> None:
     client = MagicMock()
     telemetry = LangfuseTelemetry(client, public_key="pk-test", instrument_httpx=False, instrument_botocore=False)
 
     telemetry.emit_score(score=BooleanScore(name="policy_passed", value=False), target=ScoreTarget(run_id="run-2"))
     telemetry.score_current_trace(score=NumericScore(name="confidence", value=0.91))
+    telemetry.score_current_span(score=BooleanScore(name="valid", value=False))
 
     client.create_score.assert_called_once_with(
         name="policy_passed",
@@ -1202,13 +1219,28 @@ def test_langfuse_telemetry_keeps_typed_score_escape_hatch() -> None:
         metadata={"run_id": "run-2", "session_id": "run-2"},
     )
     client.score_current_trace.assert_called_once_with(name="confidence", value=0.91, data_type="NUMERIC")
+    client.score_current_span.assert_called_once_with(name="valid", value=0.0, data_type="BOOLEAN")
 
-
-def test_langfuse_telemetry_rejects_mixed_score_targets() -> None:
-    telemetry = LangfuseTelemetry(MagicMock(), public_key="pk-test", instrument_httpx=False, instrument_botocore=False)
-
-    with pytest.raises(ValueError, match="either target or run_id/trace_id"):
-        telemetry.emit_numeric_score("latency_seconds", 1.25, run_id="run-1", target=ScoreTarget(trace_id="trace-1"))
+    compatibility_helpers = {
+        "current_trace_id",
+        "deterministic_trace_id",
+        "emit_boolean_score",
+        "emit_categorical_score",
+        "emit_numeric_score",
+        "emit_text_score",
+        "score_current_span_boolean",
+        "score_current_span_categorical",
+        "score_current_span_numeric",
+        "score_current_span_text",
+        "score_current_trace_boolean",
+        "score_current_trace_categorical",
+        "score_current_trace_numeric",
+        "score_current_trace_text",
+        "ScoreDataType",
+        "trace_url",
+    }
+    assert compatibility_helpers.isdisjoint(vars(LangfuseTelemetry))
+    assert compatibility_helpers.isdisjoint(vars(scores_module))
 
 
 def test_prompt_helpers_fetch_and_create_prompts() -> None:
@@ -1326,3 +1358,19 @@ def test_dataset_and_experiment_helpers_delegate_to_langfuse_sdk() -> None:
         max_concurrency=4,
         metadata={"variant": "main"},
     )
+
+
+def test_local_experiment_preserves_optional_item_metadata_shapes() -> None:
+    lf = MagicMock()
+
+    def task(*, item: object, **_kwargs: object) -> str:
+        return str(item)
+
+    run_local_experiment(
+        lf,
+        name="metadata-shapes",
+        data=[{}, {"metadata": None}, {"metadata": {"priority": 1}}],
+        task=task,
+    )
+
+    assert lf.run_experiment.call_args.kwargs["data"] == [{}, {"metadata": None}, {"metadata": {"priority": 1}}]
