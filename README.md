@@ -50,7 +50,7 @@ telemetry.emit_score(
 Important behavior:
 
 - Create one telemetry owner per process, after workers fork. Do not also construct `Langfuse(...)` directly.
-- HTTPX and botocore instrumentation are opt-in. Instrumentation owned by other libraries is left untouched.
+- HTTPX and botocore instrumentation are opt-in. Instrumentation owned by other libraries is left untouched; initialization fails when HTTPX is externally instrumented and authorization-header redaction is requested because the redaction hooks cannot be guaranteed.
 - Observation helpers fail open so telemetry errors do not replace application results or exceptions. Configuration, scoring, flush, and shutdown fail fast.
 - Use `await telemetry.flush()` to export pending data without closing the owner. The async context manager shuts it down.
 - Capture `telemetry.trace_runtime_context()` before sending work across a process or queue boundary. Pass it to `with_litellm_proxy_trace_metadata()` in the worker.

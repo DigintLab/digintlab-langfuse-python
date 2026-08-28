@@ -57,12 +57,18 @@ class FakeInstrumentor:
         self.is_instrumented_by_opentelemetry = False
 
 
-def _telemetry(*, instrument_httpx: bool = True, instrument_botocore: bool = False) -> LangfuseTelemetry:
+def _telemetry(
+    *,
+    instrument_httpx: bool = True,
+    instrument_botocore: bool = False,
+    redact_http_auth_headers: bool = False,
+) -> LangfuseTelemetry:
     return LangfuseTelemetry(
         MagicMock(),
         public_key=f"pk-{uuid4()}",
         instrument_httpx=instrument_httpx,
         instrument_botocore=instrument_botocore,
+        redact_http_auth_headers=redact_http_auth_headers,
     )
 
 
@@ -72,6 +78,19 @@ def test_process_instrumentation_does_not_uninstall_external_owner() -> None:
         telemetry = _telemetry()
         telemetry.instrument()
         telemetry.uninstrument()
+
+    assert httpx.instrument_calls == 0
+    assert httpx.uninstrument_calls == 0
+
+
+def test_process_instrumentation_rejects_external_httpx_owner_when_redaction_is_required() -> None:
+    httpx = FakeInstrumentor(instrumented=True)
+
+    with (
+        patch("digintlab_langfuse._instrumentation.HTTPXClientInstrumentor", return_value=httpx),
+        pytest.raises(RuntimeError, match="authorization-header redaction"),
+    ):
+        _telemetry(redact_http_auth_headers=True).instrument()
 
     assert httpx.instrument_calls == 0
     assert httpx.uninstrument_calls == 0
@@ -197,6 +216,44 @@ def test_telemetry_initialization_shuts_down_client_after_instrumentation_failur
         init_langfuse_telemetry(config, instrument_httpx=True)
 
     client.shutdown.assert_called_once_with()
+
+
+def test_failed_initialization_shutdown_respects_the_configured_deadline() -> None:
+    cleanup_started = Event()
+    cleanup_finished = Event()
+    owner_released = Event()
+    release_cleanup = Event()
+
+    def blocking_shutdown() -> None:
+        cleanup_started.set()
+        release_cleanup.wait(timeout=5)
+        cleanup_finished.set()
+
+    client = MagicMock()
+    client.shutdown.side_effect = blocking_shutdown
+    httpx = FakeInstrumentor(instrument_error=RuntimeError("httpx setup failed"))
+    config = LangfuseClientConfig(
+        public_key=f"pk-{uuid4()}",
+        secret_key="secret",
+        shutdown_timeout_seconds=0.01,
+    )
+
+    with (
+        patch("digintlab_langfuse.client._init_langfuse_client", return_value=client),
+        patch("digintlab_langfuse._instrumentation.HTTPXClientInstrumentor", return_value=httpx),
+        patch("digintlab_langfuse._lifecycle.release_failed_owner", side_effect=lambda _public_key: owner_released.set()),
+        ThreadPoolExecutor(max_workers=1) as executor,
+    ):
+        initialization = executor.submit(init_langfuse_telemetry, config, instrument_httpx=True)
+        try:
+            with pytest.raises(RuntimeError, match="httpx setup failed"):
+                initialization.result(timeout=0.5)
+            assert cleanup_started.is_set()
+        finally:
+            release_cleanup.set()
+
+        assert cleanup_finished.wait(timeout=1)
+        assert owner_released.wait(timeout=1)
 
 
 def test_telemetry_initialization_shuts_down_client_after_owner_construction_failure() -> None:

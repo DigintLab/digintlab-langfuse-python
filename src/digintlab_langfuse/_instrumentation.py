@@ -46,6 +46,7 @@ def _acquire_process_instrumentation(
     instrumentor: _ProcessInstrumentor,
     signature: tuple[str, ...],
     install: Callable[[], None],
+    allow_external_owner: bool,
 ) -> None:
     with _process_instrumentation_lock:
         existing = _process_instrumentation_leases.get(name)
@@ -61,6 +62,9 @@ def _acquire_process_instrumentation(
             return
 
         already_instrumented = instrumentor.is_instrumented_by_opentelemetry
+        if already_instrumented and not allow_external_owner:
+            message = f"Process-wide {name} instrumentation is externally owned; authorization-header redaction cannot be guaranteed."
+            raise RuntimeError(message)
         if not already_instrumented:
             install()
         _process_instrumentation_leases[name] = _ProcessInstrumentationLease(
@@ -132,6 +136,7 @@ class ProcessInstrumentation:
             instrumentor=instrumentor,
             signature=(provider_signature,),
             install=lambda: instrumentor.instrument(**kwargs),
+            allow_external_owner=True,
         )
         self._acquired_instrumentors.append("botocore")
 
@@ -155,6 +160,7 @@ class ProcessInstrumentation:
             instrumentor=instrumentor,
             signature=(provider_signature, f"redact-auth:{self._redact_http_auth_headers}"),
             install=install,
+            allow_external_owner=not self._redact_http_auth_headers,
         )
         self._acquired_instrumentors.append("httpx")
 

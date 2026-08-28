@@ -21,8 +21,8 @@ from digintlab_langfuse._lifecycle import (
     DEFAULT_OPERATION_TIMEOUT_SECONDS,
     flush_client,
     initialize_client,
-    release_failed_owner,
     shutdown_client,
+    shutdown_failed_client,
     shutdown_started,
     validate_operation_timeout,
 )
@@ -321,10 +321,11 @@ class LangfuseTelemetry:
             trace_context = TraceContext(trace_id=trace_id)
         else:
             trace_context = None
-        if not tags and metadata is None and version is None and trace_name is None:
-            propagation = propagate_attributes(session_id=session_id, user_id=user_id)
-        else:
-            propagation = propagate_attributes(
+
+        def start_propagation() -> AbstractContextManager[object]:
+            if not tags and metadata is None and version is None and trace_name is None:
+                return propagate_attributes(session_id=session_id, user_id=user_id)
+            return propagate_attributes(
                 session_id=session_id,
                 user_id=user_id,
                 trace_name=trace_name or name,
@@ -333,7 +334,11 @@ class LangfuseTelemetry:
                 version=version,
             )
 
-        with propagation:
+        with fail_open_context(
+            start_propagation,
+            logger=logger,
+            operation="Langfuse trace attribute propagation",
+        ):
             if not root_observation:
                 yield
                 return
@@ -430,10 +435,12 @@ def init_langfuse_telemetry(
         telemetry.instrument()
     except BaseException:
         try:
-            client.shutdown()
+            shutdown_failed_client(
+                client,
+                public_key=config.public_key,
+                timeout_seconds=config.shutdown_timeout_seconds,
+            )
         except Exception:
             logger.exception("Failed to shutdown Langfuse client after instrumentation setup failure")
-        else:
-            release_failed_owner(config.public_key)
         raise
     return telemetry

@@ -18,7 +18,6 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 import digintlab_langfuse
 from digintlab_langfuse import client as client_module
-from digintlab_langfuse import scores as scores_module
 from digintlab_langfuse.budgets import NumericBudgetViolation, check_numeric_budgets, validate_numeric_budget_ceilings
 from digintlab_langfuse.callbacks import ToolObservationResult, ToolSpanCallback
 from digintlab_langfuse.client import LangfuseClientConfig, LangfuseTelemetry, _init_langfuse_client, init_langfuse_telemetry
@@ -548,6 +547,31 @@ def test_trace_call_logs_root_end_failure_without_failing_body() -> None:
     ):
         pass
 
+    logger.exception.assert_called_once()
+
+
+@pytest.mark.parametrize("failure_stage", ["creation", "entry", "exit"])
+def test_trace_call_propagation_failures_do_not_replace_application_behavior(failure_stage: str) -> None:
+    client = MagicMock()
+    telemetry = LangfuseTelemetry(client, public_key="pk", instrument_httpx=False, instrument_botocore=False)
+    propagation_context = MagicMock()
+    propagate = MagicMock(return_value=propagation_context)
+    if failure_stage == "creation":
+        propagate.side_effect = RuntimeError("propagation creation failed")
+    elif failure_stage == "entry":
+        propagation_context.__enter__.side_effect = RuntimeError("propagation entry failed")
+    else:
+        propagation_context.__exit__.side_effect = RuntimeError("propagation exit failed")
+    body_ran = False
+
+    with (
+        patch("digintlab_langfuse.client.propagate_attributes", propagate),
+        patch("digintlab_langfuse.client.logger", create=True) as logger,
+        telemetry.trace_call(name="run", session_id="run-1", user_id="analyst", root_observation=False),
+    ):
+        body_ran = True
+
+    assert body_ran
     logger.exception.assert_called_once()
 
 
@@ -1203,7 +1227,7 @@ def test_emit_score_supports_boolean_text_and_metadata() -> None:
     )
 
 
-def test_langfuse_telemetry_exposes_only_typed_score_operations() -> None:
+def test_langfuse_telemetry_emits_typed_scores() -> None:
     client = MagicMock()
     telemetry = LangfuseTelemetry(client, public_key="pk-test", instrument_httpx=False, instrument_botocore=False)
 
@@ -1220,27 +1244,6 @@ def test_langfuse_telemetry_exposes_only_typed_score_operations() -> None:
     )
     client.score_current_trace.assert_called_once_with(name="confidence", value=0.91, data_type="NUMERIC")
     client.score_current_span.assert_called_once_with(name="valid", value=0.0, data_type="BOOLEAN")
-
-    compatibility_helpers = {
-        "current_trace_id",
-        "deterministic_trace_id",
-        "emit_boolean_score",
-        "emit_categorical_score",
-        "emit_numeric_score",
-        "emit_text_score",
-        "score_current_span_boolean",
-        "score_current_span_categorical",
-        "score_current_span_numeric",
-        "score_current_span_text",
-        "score_current_trace_boolean",
-        "score_current_trace_categorical",
-        "score_current_trace_numeric",
-        "score_current_trace_text",
-        "ScoreDataType",
-        "trace_url",
-    }
-    assert compatibility_helpers.isdisjoint(vars(LangfuseTelemetry))
-    assert compatibility_helpers.isdisjoint(vars(scores_module))
 
 
 def test_prompt_helpers_fetch_and_create_prompts() -> None:

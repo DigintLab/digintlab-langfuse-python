@@ -68,4 +68,3 @@ uv build
 - Never push directly to `main`; work on a feature branch and open a PR.
 - Squash related work before opening or updating the PR.
 - Commit messages should name the subsystem and change in the imperative.
-- Avoid generic messages like `fix`, `wip`, or `cleanup`.

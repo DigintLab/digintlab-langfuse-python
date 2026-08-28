@@ -5,6 +5,7 @@ import math
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
+from functools import partial
 from threading import Lock, RLock
 from weakref import WeakKeyDictionary
 
@@ -113,6 +114,29 @@ def _schedule_shutdown(lf: Langfuse) -> Future[None]:
             existing = state.executor.submit(_run_shutdown, lf, state)
             state.shutdown_future = existing
         return existing
+
+
+def _release_failed_owner_after_shutdown(public_key: str, future: Future[None]) -> None:
+    if future.cancelled() or future.exception() is not None:
+        return
+    release_failed_owner(public_key)
+
+
+def shutdown_failed_client(
+    lf: Langfuse,
+    *,
+    public_key: str,
+    timeout_seconds: float = DEFAULT_OPERATION_TIMEOUT_SECONDS,
+) -> None:
+    """Bound failed-initialization cleanup and release ownership after shutdown."""
+    timeout = validate_operation_timeout(timeout_seconds)
+    future = _schedule_shutdown(lf)
+    try:
+        future.result(timeout=timeout)
+    except TimeoutError:
+        future.add_done_callback(partial(_release_failed_owner_after_shutdown, public_key))
+        raise
+    release_failed_owner(public_key)
 
 
 async def _await_future(future: Future[None], *, timeout_seconds: float) -> None:
