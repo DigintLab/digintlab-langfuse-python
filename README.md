@@ -123,3 +123,7 @@ LANGFUSE_E2E_SECRET_KEY=... \
 LANGFUSE_E2E_BASE_URL=https://cloud.langfuse.com \
 task test-e2e
 ```
+
+## License
+
+This package is licensed under the GNU Lesser General Public License v3.0 or later (`LGPL-3.0-or-later`). You may use it in any application, including proprietary applications that import the library unmodified. If you distribute a modified version of the library itself, those modifications must be made available under the LGPL. See [`COPYING.LESSER`](COPYING.LESSER) for the LGPL terms and [`COPYING`](COPYING) for the GNU GPL v3 text it builds on.
