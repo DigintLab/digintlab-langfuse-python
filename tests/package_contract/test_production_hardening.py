@@ -408,6 +408,29 @@ def test_client_configuration_rejects_unsafe_or_invalid_values() -> None:
             LangfuseClientConfig(public_key="public", secret_key="secret", flush_timeout_seconds=value)
 
 
+def test_langfuse_endpoint_delegates_upstream_defaults_with_https_guard(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LANGFUSE_BASE_URL", raising=False)
+    monkeypatch.delenv("LANGFUSE_HOST", raising=False)
+    config = LangfuseClientConfig(public_key="public", secret_key="secret")
+    assert config.base_url is None
+
+    monkeypatch.setenv("LANGFUSE_HOST", "http://localhost:3000")
+    with pytest.raises(ValueError, match="allow_insecure_http"):
+        LangfuseClientConfig(public_key="public", secret_key="secret")
+    assert LangfuseClientConfig(public_key="public", secret_key="secret", allow_insecure_http=True).base_url is None
+
+    monkeypatch.setenv("LANGFUSE_BASE_URL", "https://secure.example")
+    assert LangfuseClientConfig(public_key="public", secret_key="secret").base_url is None
+
+    monkeypatch.setenv("LANGFUSE_BASE_URL", "http://untrusted.example")
+    with pytest.raises(ValueError, match="allow_insecure_http"):
+        LangfuseClientConfig(public_key="public", secret_key="secret")
+    assert LangfuseClientConfig(public_key="public", secret_key="secret", base_url="https://explicit.example").base_url == "https://explicit.example"
+
+    with pytest.raises(ValueError, match="absolute HTTP"):
+        LangfuseClientConfig(public_key="public", secret_key="secret", base_url="")
+
+
 def test_client_configuration_repr_does_not_expose_secret_key() -> None:
     config = LangfuseClientConfig(public_key="public", secret_key="super-secret")
 
