@@ -683,7 +683,7 @@ requires-dist = [
     { name = "botocore", specifier = ">=1.43.82,<2" },
     { name = "httpx", specifier = ">=0.28.1,<1" },
     { name = "langchain-core", specifier = ">=1.6.1,<2" },
-    { name = "langfuse", specifier = "==5.2.0" },
+    { name = "langfuse", specifier = ">=5.2.0,<5.3" },
     { name = "opentelemetry-api", specifier = ">=1.44.0,<2" },
     { name = "opentelemetry-instrumentation-botocore", specifier = ">=0.65b0,<1" },
     { name = "opentelemetry-instrumentation-httpx", specifier = ">=0.65b0,<1" },

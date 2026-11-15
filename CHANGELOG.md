@@ -2,6 +2,17 @@
 
 All notable changes to this package are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- README reference for every configuration field and public module, a limitations section, and runnable examples under `examples/`, compiled and run offline in the test suite.
+- Tag-triggered release workflow that checks the tag against the package version, runs the checks, builds and attests the wheel and sdist, and publishes the GitHub release with notes from this changelog.
+
+### Changed
+
+- Relaxed the Langfuse requirement from an exact pin to the patch releases of the tested minor version (`langfuse>=5.2.0,<5.3`).
+
 ## [0.4.0] - 2026-11-15
 
 ### Added
@@ -39,4 +50,5 @@ All notable changes to this package are documented here. The format follows [Kee
 - Replaced type-specific score convenience methods with the typed `Score` and `ScoreTarget` API.
 - Limited support to Python 3.13–3.14 and Langfuse 4.14.2.
 
+[Unreleased]: https://github.com/DigintLab/digintlab-langfuse-python/compare/v0.4.0...HEAD
 [0.4.0]: https://github.com/DigintLab/digintlab-langfuse-python/releases/tag/v0.4.0

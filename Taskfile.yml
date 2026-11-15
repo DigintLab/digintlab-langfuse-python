@@ -28,12 +28,12 @@ tasks:
   lint:
     desc: Run lint checks
     cmds:
-      - uv run ruff check src/ tests/
+      - uv run ruff check src/ tests/ examples/
 
   type-check:
     desc: Run static type checks
     cmds:
-      - uv run mypy src/ tests/
+      - uv run mypy src/ tests/ examples/
 
   check:
     desc: Run formatting, lint, and type checks
