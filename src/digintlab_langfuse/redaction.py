@@ -12,6 +12,7 @@ from functools import cache
 from typing import TYPE_CHECKING
 
 from langfuse.types import (
+    AttributeValue,
     MaskFunction,
     MaskOtelSpansFunction,
     MaskOtelSpansParams,
@@ -223,7 +224,7 @@ def _redact_otel_string(value: str, config: SensitiveDataRedactionConfig) -> str
 def _redact_otel_attribute(
     *,
     name: str,
-    value: object,
+    value: AttributeValue,
     config: SensitiveDataRedactionConfig,
 ) -> str | tuple[str, ...] | None:
     """Return a safe replacement, or None when no attribute patch is needed."""
