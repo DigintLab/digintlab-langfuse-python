@@ -11,6 +11,12 @@ All notable changes to this package are documented here.
 ### Changed
 
 - Licensed the package under LGPL-3.0-or-later.
+- Pinned Langfuse 5.2.0. Clients created through `init_langfuse_telemetry` pick up the SDK's LangChain `CallbackHandler` fixes: root-run propagated attributes now reach child runs under `ainvoke`, Langfuse prompts are deregistered when a chain errors, and `message.name` is kept in generation input.
+- Documented installation from tagged GitHub releases; the package is not published on PyPI.
+
+### Fixed
+
+- Sensitive-data redaction now masks credential fields inside JSON documents carried as strings, such as LangChain tool `input_str` and string tool outputs, in both the Langfuse mask and the OpenTelemetry mask.
 
 ## 0.3.0 - 28-08-2026
 

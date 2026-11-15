@@ -227,19 +227,19 @@ async def _wait_for_observations(
     latest: dict[str, ObservationV2] = {}
     while monotonic() < deadline:
         try:
-            response = await telemetry.client.async_api.observations.get_many(
+            pages = telemetry.client.aiter_observation_pages(
                 trace_id=trace_id,
                 fields="core,basic,io,metadata,trace_context",
                 expand_metadata="authorization,e2e_run_id",
-                limit=20,
                 from_start_time=window_start,
                 to_start_time=window_end,
             )
+            observations = [observation async for page in pages for observation in page.data]
         except ApiError as exc:
             if exc.status_code not in TRANSIENT_HTTP_STATUS_CODES:
                 raise
         else:
-            latest = {observation.name: observation for observation in response.data if observation.name is not None}
+            latest = {observation.name: observation for observation in observations if observation.name is not None}
             if _observations_ready(
                 latest,
                 expected_names=expected_names,
