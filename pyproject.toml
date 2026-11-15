@@ -22,7 +22,7 @@ dependencies = [
   "botocore>=1.43.82,<2",
   "httpx>=0.28.1,<1",
   "langchain-core>=1.6.1,<2",
-  "langfuse==5.2.0",
+  "langfuse>=5.2.0,<5.3",
   "opentelemetry-api>=1.44.0,<2",
   "opentelemetry-instrumentation-botocore>=0.65b0,<1",
   "opentelemetry-instrumentation-httpx>=0.65b0,<1",
