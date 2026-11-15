@@ -19,6 +19,7 @@ jobs:
         python: ['3.13', '3.14', '3.15']
     env:
       UV_LOCKED: '1'
+      UV_CACHE_DIR: /home/runner/.cache/uv
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -26,17 +27,18 @@ jobs:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           python-version: ${{ matrix.python }}
-          enable-cache: true
-          cache-python: true
-          cache-suffix: python-${{ matrix.python }}
+          enable-cache: false
+      # One cache with a fallback, so a lockfile change keeps the venv and the locally built wheels (Python 3.15 builds several
+      # dependencies from source) instead of starting over.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             .venv
             .mypy_cache
-          key: python-${{ matrix.python }}-venv-${{ hashFiles('uv.lock') }}
+            /home/runner/.cache/uv
+          key: python-${{ matrix.python }}-deps-${{ hashFiles('uv.lock') }}
           restore-keys: |
-            python-${{ matrix.python }}-venv-
+            python-${{ matrix.python }}-deps-
       - name: Install Task
         uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
         with:
@@ -51,6 +53,8 @@ jobs:
         run: task test
       - name: Build
         run: uv build
+      - name: Prune the uv cache
+        run: uv cache prune --ci
 
   infra-scan:
     name: Scan with KICS
