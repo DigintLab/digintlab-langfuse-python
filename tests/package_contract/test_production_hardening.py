@@ -480,6 +480,8 @@ def test_otel_redaction_covers_structured_strings_and_common_credential_keys() -
                         "non_finite": '{"password":"secret","metric":NaN}',
                         "camel_case": '{"clientSecret":"secret","accessToken":"token"}',
                         "batch": ('{"password":"secret"}',),
+                        "unmodified": "public",
+                        "numerical": 42,
                     },
                     resource_attributes={},
                 )
