@@ -6,8 +6,6 @@ Typed Python helpers for Langfuse tracing, scoring, callbacks, and LiteLLM metad
 
 Requires Python 3.13 or 3.14. Langfuse is pinned to the version tested by this package.
 
-The Langfuse SDK v5 requires **Langfuse Cloud or a self-hosted Langfuse server at v4.59.0 or newer**. Upgrade the server before deploying this package to an older self-hosted installation. Langfuse v5 consolidates score reads under `async_api.scores.get_many(...)`; it no longer provides `scores_v3`.
-
 ```bash
 uv add digintlab-langfuse-python
 ```
