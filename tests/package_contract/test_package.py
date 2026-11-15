@@ -1362,6 +1362,7 @@ def test_dataset_and_experiment_helpers_delegate_to_langfuse_sdk() -> None:
         metadata={"variant": "main"},
     )
 
+
 def test_local_experiment_forwards_shared_experiment_id_and_returns_upstream_result() -> None:
     lf = MagicMock()
     upstream_result = lf.run_experiment.return_value
