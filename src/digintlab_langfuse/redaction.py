@@ -58,7 +58,9 @@ DEFAULT_PII_ENTITIES = frozenset(
     }
 )
 _BEARER_PATTERN = re.compile(r"(?i)\bbearer\s+[a-z0-9._~+/=-]+")
-_REDACTION_EXTRA_ERROR = 'PII redaction requires the optional dependency: uv add "digintlab-langfuse-python[redaction]".'
+_REDACTION_EXTRA_ERROR = (
+    'PII redaction requires the optional "redaction" extra: install "digintlab-langfuse-python[redaction]" as shown in the README.'
+)
 
 
 def _normalized_field_name(name: str) -> str:
