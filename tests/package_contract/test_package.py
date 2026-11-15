@@ -1360,6 +1360,7 @@ def test_dataset_and_experiment_helpers_delegate_to_langfuse_sdk() -> None:
         run_evaluators=[],
         max_concurrency=4,
         metadata={"variant": "main"},
+        experiment_id=None,
     )
 
 
