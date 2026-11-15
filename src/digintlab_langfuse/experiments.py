@@ -92,8 +92,10 @@ def run_local_experiment(
     run_evaluators: Sequence[RunEvaluatorFunction] = (),
     max_concurrency: int = 50,
     metadata: dict[str, str] | None = None,
+    experiment_id: str | None = None,
 ) -> ExperimentResult:
-    """Run a Langfuse experiment over local in-memory items."""
+    """Run a local experiment, optionally joining a shared upstream experiment ID."""
+    experiment_kwargs = {"experiment_id": experiment_id} if experiment_id is not None else {}
     return lf.run_experiment(
         name=name,
         run_name=run_name,
@@ -104,4 +106,5 @@ def run_local_experiment(
         run_evaluators=list(run_evaluators),
         max_concurrency=max_concurrency,
         metadata=metadata,
+        **experiment_kwargs,
     )
