@@ -15,7 +15,7 @@ import pytest
 from langfuse import Langfuse
 from langfuse.api.commons.types import ObservationV2
 from langfuse.api.core import ApiError
-from langfuse.api.scores_v3.types import ScoreV3
+from langfuse.api.scores.types import ScoreV3
 from opentelemetry.sdk.trace import TracerProvider
 
 from digintlab_langfuse import (
@@ -269,7 +269,7 @@ async def _wait_for_scores(
     latest: dict[str, ScoreV3] = {}
     while monotonic() < deadline:
         try:
-            response = await telemetry.client.async_api.scores_v3.get_many_v3(
+            response = await telemetry.client.async_api.scores.get_many(
                 trace_id=trace_id,
                 fields="subject",
                 limit=20,
