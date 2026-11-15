@@ -4,12 +4,14 @@ version = "0.3.0"
 description = "Typed Python helpers for Langfuse tracing, scoring, callbacks, and LiteLLM metadata in DigIntLab agent runtimes."
 readme = "README.md"
 requires-python = ">=3.13,<3.15"
-license = { text = "Proprietary" }
+license = "LGPL-3.0-or-later"
+license-files = ["COPYING", "COPYING.LESSER"]
 authors = [{ name = "DigIntLab" }]
 keywords = ["langfuse", "langchain", "litellm", "opentelemetry", "observability"]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
+  "License :: OSI Approved :: GNU Lesser General Public License v3 or later (LGPLv3+)",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",

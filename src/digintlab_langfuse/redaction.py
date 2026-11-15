@@ -58,7 +58,9 @@ DEFAULT_PII_ENTITIES = frozenset(
     }
 )
 _BEARER_PATTERN = re.compile(r"(?i)\bbearer\s+[a-z0-9._~+/=-]+")
-_REDACTION_EXTRA_ERROR = 'PII redaction requires the optional dependency: uv add "digintlab-langfuse-python[redaction]".'
+_REDACTION_EXTRA_ERROR = (
+    'PII redaction requires the optional "redaction" extra: install "digintlab-langfuse-python[redaction]" as shown in the README.'
+)
 
 
 def _normalized_field_name(name: str) -> str:
@@ -174,6 +176,18 @@ def _is_sensitive_field_name(name: str, config: SensitiveDataRedactionConfig) ->
     return any(_normalized_field_name(part) in config.sensitive_field_names for part in re.split(r"[./]", name))
 
 
+def _redact_text(value: str, config: SensitiveDataRedactionConfig) -> str:
+    """Redact a string, parsing embedded JSON documents so their credential fields are masked too."""
+    if not value.lstrip().startswith(("{", "[")):
+        return _redact_string(value, config)
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return _redact_string(value, config)
+    redacted_json = redact_sensitive_data(parsed, config)
+    return json.dumps(redacted_json, ensure_ascii=False, separators=(",", ":")) if redacted_json != parsed else value
+
+
 def redact_sensitive_data(value: object, config: SensitiveDataRedactionConfig) -> JsonValue:
     """Return a JSON value with configured sensitive fields and strings masked."""
     match value:
@@ -198,7 +212,7 @@ def redact_sensitive_data(value: object, config: SensitiveDataRedactionConfig) -
             return [redact_sensitive_data(item, config) for item in value]
         case _:
             text = str(value)
-    return _redact_string(text, config)
+    return _redact_text(text, config)
 
 
 def create_sensitive_data_mask(config: SensitiveDataRedactionConfig) -> MaskFunction:
@@ -208,17 +222,6 @@ def create_sensitive_data_mask(config: SensitiveDataRedactionConfig) -> MaskFunc
         return redact_sensitive_data(data, config)
 
     return mask
-
-
-def _redact_otel_string(value: str, config: SensitiveDataRedactionConfig) -> str:
-    if not value.lstrip().startswith(("{", "[")):
-        return _redact_string(value, config)
-    try:
-        parsed = json.loads(value)
-        redacted_json = redact_sensitive_data(parsed, config)
-    except json.JSONDecodeError:
-        return _redact_string(value, config)
-    return json.dumps(redacted_json, ensure_ascii=False, separators=(",", ":")) if redacted_json != parsed else value
 
 
 def _redact_otel_attribute(
@@ -231,10 +234,10 @@ def _redact_otel_attribute(
     if _is_sensitive_field_name(name, config):
         return config.replacement
     if isinstance(value, str):
-        redacted = _redact_otel_string(value, config)
+        redacted = _redact_text(value, config)
         return redacted if redacted != value else None
     if isinstance(value, tuple | list) and all(isinstance(item, str) for item in value):
-        redacted_items = tuple(_redact_otel_string(item, config) for item in value)
+        redacted_items = tuple(_redact_text(item, config) for item in value)
         return redacted_items if redacted_items != tuple(value) else None
     return None
 

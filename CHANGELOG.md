@@ -2,6 +2,12 @@
 
 All notable changes to this package are documented here.
 
+## Unreleased
+
+### Changed
+
+- Licensed the package under LGPL-3.0-or-later.
+
 ## 0.3.0 - 28-08-2026
 
 ### Added
