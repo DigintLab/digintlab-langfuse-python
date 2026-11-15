@@ -77,7 +77,7 @@ async def test_real_sdk_exports_closed_parented_and_optionally_redacted_observat
         "email": "[REDACTED]",
         "password": "[REDACTED]",
     }
-    assert root.attributes["langfuse.observation.metadata.failure"] == "[REDACTED]"
+    assert json.loads(str(root.attributes["langfuse.observation.metadata.failure"])) == "[REDACTED]"
     assert raw_generation.attributes is not None
     assert raw_generation.attributes["user.email"] == "[REDACTED]"
     assert raw_generation.attributes["authorization"] == "[REDACTED]"

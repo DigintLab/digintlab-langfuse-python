@@ -12,6 +12,7 @@ from functools import cache
 from typing import TYPE_CHECKING
 
 from langfuse.types import (
+    AttributeValue,
     MaskFunction,
     MaskOtelSpansFunction,
     MaskOtelSpansParams,
@@ -20,7 +21,6 @@ from langfuse.types import (
 )
 
 if TYPE_CHECKING:
-    from opentelemetry.util.types import AttributeValue
     from presidio_analyzer import AnalyzerEngine
     from presidio_anonymizer import AnonymizerEngine
 
@@ -226,14 +226,17 @@ def _redact_otel_attribute(
     name: str,
     value: AttributeValue,
     config: SensitiveDataRedactionConfig,
-) -> AttributeValue:
+) -> str | tuple[str, ...] | None:
+    """Return a safe replacement, or None when no attribute patch is needed."""
     if _is_sensitive_field_name(name, config):
         return config.replacement
     if isinstance(value, str):
-        return _redact_otel_string(value, config)
+        redacted = _redact_otel_string(value, config)
+        return redacted if redacted != value else None
     if isinstance(value, tuple | list) and all(isinstance(item, str) for item in value):
-        return tuple(_redact_otel_string(item, config) for item in value)
-    return value
+        redacted_items = tuple(_redact_otel_string(item, config) for item in value)
+        return redacted_items if redacted_items != tuple(value) else None
+    return None
 
 
 def create_sensitive_data_otel_mask(config: SensitiveDataRedactionConfig) -> MaskOtelSpansFunction:
@@ -242,10 +245,10 @@ def create_sensitive_data_otel_mask(config: SensitiveDataRedactionConfig) -> Mas
     def mask_otel_spans(*, params: MaskOtelSpansParams) -> MaskOtelSpansResult:
         patches = {}
         for identifier, span in params.spans.items():
-            replacements: dict[str, AttributeValue] = {}
+            replacements: dict[str, str | tuple[str, ...]] = {}
             for name, value in span.attributes.items():
                 redacted = _redact_otel_attribute(name=name, value=value, config=config)
-                if redacted != value:
+                if redacted is not None:
                     replacements[name] = redacted
             if replacements:
                 patches[identifier] = OtelSpanPatch(set_attributes=replacements)

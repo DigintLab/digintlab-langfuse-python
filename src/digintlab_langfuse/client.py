@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import math
+import os
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
@@ -52,7 +53,6 @@ from digintlab_langfuse.spans import (
     trace_runtime_context as capture_trace_runtime_context,
 )
 
-_LANGFUSE_DEFAULT_BASE_URL = "https://cloud.langfuse.com"
 logger = logging.getLogger(__name__)
 
 __all__ = ["LangfuseClientConfig", "LangfuseTelemetry", "init_langfuse_telemetry"]
@@ -63,7 +63,7 @@ class _LangfuseInitKwargs(TypedDict):
 
     public_key: str
     secret_key: str
-    base_url: str
+    base_url: str | None
     timeout: int | None
     debug: bool
     environment: str | None
@@ -79,13 +79,30 @@ class _LangfuseInitKwargs(TypedDict):
     span_exporter: SpanExporter | None
 
 
+def _validate_endpoint_url(base_url: str | None, *, allow_insecure_http: bool) -> None:
+    """Enforce endpoint security even when using Langfuse's environment defaults."""
+    effective_base_url = base_url
+    if effective_base_url is None:
+        effective_base_url = os.environ.get("LANGFUSE_BASE_URL") or os.environ.get("LANGFUSE_HOST")
+    if effective_base_url is None:
+        return
+
+    url = httpx.URL(effective_base_url)
+    if url.host is None or url.scheme not in {"http", "https"}:
+        message = "Langfuse base_url must be an absolute HTTP(S) URL."
+        raise ValueError(message)
+    if url.scheme != "https" and not allow_insecure_http:
+        message = "Plain HTTP Langfuse endpoints require allow_insecure_http=True."
+        raise ValueError(message)
+
+
 @dataclass(frozen=True, slots=True)
 class LangfuseClientConfig:
     """Configuration required to initialize the Langfuse SDK client."""
 
     public_key: str
     secret_key: str = field(repr=False)
-    base_url: str = _LANGFUSE_DEFAULT_BASE_URL
+    base_url: str | None = None
     timeout: int | None = None
     environment: str | None = None
     release: str | None = None
@@ -110,13 +127,7 @@ class LangfuseClientConfig:
         if not self.public_key.strip() or not self.secret_key.strip():
             message = "Langfuse public_key and secret_key must not be empty."
             raise ValueError(message)
-        url = httpx.URL(self.base_url)
-        if url.host is None or url.scheme not in {"http", "https"}:
-            message = "Langfuse base_url must be an absolute HTTP(S) URL."
-            raise ValueError(message)
-        if url.scheme != "https" and not self.allow_insecure_http:
-            message = "Plain HTTP Langfuse endpoints require allow_insecure_http=True."
-            raise ValueError(message)
+        _validate_endpoint_url(self.base_url, allow_insecure_http=self.allow_insecure_http)
         if self.timeout is not None and self.timeout <= 0:
             message = "Langfuse timeout must be greater than zero."
             raise ValueError(message)
