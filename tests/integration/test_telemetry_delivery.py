@@ -18,6 +18,9 @@ from digintlab_langfuse import LangfuseClientConfig, init_langfuse_telemetry
 from digintlab_langfuse.scores import NumericScore, ScoreTarget
 
 
+# Langfuse 5.0.4's backoff dependency uses deprecated asyncio.iscoroutinefunction.
+# Keep unrelated warning checks strict; ignore only this upstream warning in this test.
+@pytest.mark.filterwarnings("ignore:'asyncio.iscoroutinefunction' is deprecated.*:DeprecationWarning:backoff\\._decorator")
 @pytest.mark.asyncio
 async def test_flush_delivers_pending_scores_without_waiting_for_batch_interval() -> None:
     """A library flush should drain SDK score tasks, not just OTEL spans."""
