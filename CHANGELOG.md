@@ -4,6 +4,10 @@ All notable changes to this package are documented here.
 
 ## Unreleased
 
+### Added
+
+- Added support for Python 3.15.
+
 ### Changed
 
 - Licensed the package under LGPL-3.0-or-later.

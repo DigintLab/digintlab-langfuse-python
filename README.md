@@ -4,7 +4,7 @@ Typed Python helpers for Langfuse tracing, scoring, callbacks, and LiteLLM metad
 
 ## Install
 
-Requires Python 3.13 or 3.14. Langfuse is pinned to the version tested by this package.
+Requires Python 3.13, 3.14, or 3.15. Langfuse is pinned to the version tested by this package.
 
 The package is not published on PyPI. Install it from a tagged GitHub release (replace `v0.3.0` with the release you want). Git installs use your configured Git credentials when the repository requires authentication:
 
