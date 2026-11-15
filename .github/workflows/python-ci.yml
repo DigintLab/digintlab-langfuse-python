@@ -34,21 +34,19 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
           enable-cache: true
+          cache-python: true
           cache-suffix: python-${{ matrix.python }}
-      - id: cache-deps
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             .venv
             .mypy_cache
-            ~/.local/.cache/uv
           key: python-${{ matrix.python }}-venv-${{ hashFiles('uv.lock') }}
       - name: Install Task
         uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
         with:
           repo-token: ${{ github.token }}
       - name: Install dependencies
-        if: ${{ steps.cache-deps.outputs.cache-hit != 'true' }}
         run: task install
       - name: Format, lint, and type checks
         run: task check
