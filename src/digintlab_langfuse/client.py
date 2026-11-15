@@ -79,6 +79,23 @@ class _LangfuseInitKwargs(TypedDict):
     span_exporter: SpanExporter | None
 
 
+def _validate_endpoint_url(base_url: str | None, *, allow_insecure_http: bool) -> None:
+    """Enforce endpoint security even when using Langfuse's environment defaults."""
+    effective_base_url = base_url
+    if effective_base_url is None:
+        effective_base_url = os.environ.get("LANGFUSE_BASE_URL") or os.environ.get("LANGFUSE_HOST")
+    if effective_base_url is None:
+        return
+
+    url = httpx.URL(effective_base_url)
+    if url.host is None or url.scheme not in {"http", "https"}:
+        message = "Langfuse base_url must be an absolute HTTP(S) URL."
+        raise ValueError(message)
+    if url.scheme != "https" and not allow_insecure_http:
+        message = "Plain HTTP Langfuse endpoints require allow_insecure_http=True."
+        raise ValueError(message)
+
+
 @dataclass(frozen=True, slots=True)
 class LangfuseClientConfig:
     """Configuration required to initialize the Langfuse SDK client."""
@@ -110,19 +127,7 @@ class LangfuseClientConfig:
         if not self.public_key.strip() or not self.secret_key.strip():
             message = "Langfuse public_key and secret_key must not be empty."
             raise ValueError(message)
-        # Delegate the endpoint default to Langfuse, but validate any explicit or
-        # environment-configured endpoint before the SDK may use it.
-        effective_base_url = self.base_url
-        if effective_base_url is None:
-            effective_base_url = os.environ.get("LANGFUSE_BASE_URL") or os.environ.get("LANGFUSE_HOST")
-        if effective_base_url is not None:
-            url = httpx.URL(effective_base_url)
-            if url.host is None or url.scheme not in {"http", "https"}:
-                message = "Langfuse base_url must be an absolute HTTP(S) URL."
-                raise ValueError(message)
-            if url.scheme != "https" and not self.allow_insecure_http:
-                message = "Plain HTTP Langfuse endpoints require allow_insecure_http=True."
-                raise ValueError(message)
+        _validate_endpoint_url(self.base_url, allow_insecure_http=self.allow_insecure_http)
         if self.timeout is not None and self.timeout <= 0:
             message = "Langfuse timeout must be greater than zero."
             raise ValueError(message)
