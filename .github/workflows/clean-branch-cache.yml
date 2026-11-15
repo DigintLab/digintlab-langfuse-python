@@ -5,9 +5,30 @@ on:
     types:
       - closed
 
+permissions: {}
+
 jobs:
   cleanup:
+    name: Cleanup caches for a merged branch
     if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
     permissions:
       actions: write
-    uses: DigintLab/github/.github/workflows/clean-branch-cache.yml@cleanup-v0
+    steps:
+      - name: Cleanup
+        # https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/caching-dependencies-to-speed-up-workflows#managing-caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BRANCH: refs/pull/${{ github.event.pull_request.number }}/merge
+        run: |
+          echo "Fetching list of cache keys"
+          cache_ids=$(gh cache list --ref "${BRANCH}" --limit 100 --json id --jq '.[].id')
+
+          # Do not fail the workflow while deleting cache keys.
+          set +e
+          echo "Deleting caches..."
+          for cache_id in $cache_ids; do
+            gh cache delete "$cache_id"
+          done
+          echo "Done"
