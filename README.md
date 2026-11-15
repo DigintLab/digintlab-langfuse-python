@@ -6,8 +6,23 @@ Typed Python helpers for Langfuse tracing, scoring, callbacks, and LiteLLM metad
 
 Requires Python 3.13 or 3.14. Langfuse is pinned to the version tested by this package.
 
+The package is not published on PyPI. Install it from a tagged GitHub release (replace `v0.3.0` with the release you want). Git installs use your configured Git credentials when the repository requires authentication:
+
 ```bash
-uv add digintlab-langfuse-python
+uv add "digintlab-langfuse-python @ git+https://github.com/DigintLab/digintlab-langfuse-python@v0.3.0"
+```
+
+With pip:
+
+```bash
+pip install "digintlab-langfuse-python @ git+https://github.com/DigintLab/digintlab-langfuse-python@v0.3.0"
+```
+
+Alternatively, each [GitHub release](https://github.com/DigintLab/digintlab-langfuse-python/releases) attaches a wheel and a source distribution. Download the wheel and install the local file:
+
+```bash
+gh release download v0.3.0 -R DigintLab/digintlab-langfuse-python -p "*.whl"
+uv add ./digintlab_langfuse_python-0.3.0-py3-none-any.whl
 ```
 
 ## Usage
@@ -61,8 +76,10 @@ Important behavior:
 PII redaction is optional:
 
 ```bash
-uv add "digintlab-langfuse-python[redaction]"
+uv add "digintlab-langfuse-python[redaction] @ git+https://github.com/DigintLab/digintlab-langfuse-python@v0.3.0"
 ```
+
+With pip, pass the same requirement string to `pip install`.
 
 ```python
 from digintlab_langfuse import LangfuseClientConfig, SensitiveDataRedactionConfig
