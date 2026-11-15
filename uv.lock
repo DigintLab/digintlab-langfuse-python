@@ -157,6 +157,15 @@ wheels = [
 ]
 
 [[package]]
+name = "botocore-stubs"
+version = "1.43.126"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/8c/7a/717e3dec2e4721f76621ddb397b4035ec1aff0c174b80f5c439512a352e9/botocore_stubs-1.43.126.tar.gz", hash = "sha256:15b14ba9066f6eec50a5861407fede151b4395e986036c8d564f4b908835f820", size = 42882, upload-time = "2026-11-06T22:57:14.723Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/66/23/10b0f6ce12d3d85cfaf24d2e420f76e8e744970289e447d43846e51db32d/botocore_stubs-1.43.126-py3-none-any.whl", hash = "sha256:07f1b96c89d787b95ebf0cc5f22fc2b7f61c179e704c289b377505d8d61d5d49", size = 67248, upload-time = "2026-11-06T22:57:12.732Z" },
+]
+
+[[package]]
 name = "cachecontrol"
 version = "0.14.4"
 source = { registry = "https://pypi.org/simple" }
@@ -559,8 +568,10 @@ audit = [
     { name = "pip-audit" },
 ]
 dev = [
+    { name = "botocore-stubs" },
     { name = "hatchling" },
     { name = "mypy", extra = ["faster-cache"] },
+    { name = "mypy-boto3-bedrock-runtime" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
@@ -588,8 +599,10 @@ provides-extras = ["redaction"]
 [package.metadata.requires-dev]
 audit = [{ name = "pip-audit", specifier = "==2.10.1" }]
 dev = [
+    { name = "botocore-stubs", specifier = ">=1.43.0,<1.44" },
     { name = "hatchling", specifier = "==1.32.4" },
     { name = "mypy", extras = ["faster-cache"], specifier = ">=2.3.1" },
+    { name = "mypy-boto3-bedrock-runtime", specifier = ">=1.43.0,<1.44" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "pytest-asyncio", specifier = ">=1.4.0" },
     { name = "pytest-cov", specifier = ">=7.1.0,<8" },
@@ -1205,6 +1218,15 @@ wheels = [
 [package.optional-dependencies]
 faster-cache = [
     { name = "orjson" },
+]
+
+[[package]]
+name = "mypy-boto3-bedrock-runtime"
+version = "1.43.62"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/26/78/542f5804cf0f9e3c1ccbf30917eaa3b4b6002b91965de02d065d7441fc93/mypy_boto3_bedrock_runtime-1.43.62.tar.gz", hash = "sha256:beb70b08ef72cdfd5036bcd3270f2fbac0a2ce5e40f70dfc1d87c4f139d4d7ff", size = 31492, upload-time = "2026-07-31T19:54:15.291Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d9/b2/e3bff20acd290b909f1c28856d6d8d7984f7f7d5bda299d5957f64e97bb3/mypy_boto3_bedrock_runtime-1.43.62-py3-none-any.whl", hash = "sha256:603d9df54da5029fc0d0e3c09b6db33733af53182bee030c0c7af99e88ed3b39", size = 37865, upload-time = "2026-07-31T19:54:13.959Z" },
 ]
 
 [[package]]

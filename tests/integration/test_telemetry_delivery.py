@@ -2,12 +2,12 @@
 
 import json
 import warnings
+from typing import TYPE_CHECKING, cast
 from uuid import uuid4
 
 import botocore.session
 import httpx
 import pytest
-from botocore.client import ConverseRequest, ConverseResponse
 from botocore.stub import Stubber
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -18,6 +18,10 @@ from opentelemetry.semconv._incubating.attributes.gen_ai_attributes import (
 
 from digintlab_langfuse import LangfuseClientConfig, init_langfuse_telemetry
 from digintlab_langfuse.scores import NumericScore, ScoreTarget
+
+if TYPE_CHECKING:
+    from mypy_boto3_bedrock_runtime.client import BedrockRuntimeClient
+    from mypy_boto3_bedrock_runtime.type_defs import ConverseRequestTypeDef
 
 
 @pytest.mark.asyncio
@@ -85,17 +89,20 @@ async def test_bedrock_converse_preserves_prompt_cache_usage_in_exported_span() 
         instrument_botocore=True,
     )
     session = botocore.session.get_session()
-    client = session.create_client(
-        "bedrock-runtime",
-        region_name="us-east-1",
-        aws_access_key_id="test-access-key",
-        aws_secret_access_key="test-secret-key",
+    client = cast(
+        "BedrockRuntimeClient",
+        session.create_client(
+            "bedrock-runtime",
+            region_name="us-east-1",
+            aws_access_key_id="test-access-key",
+            aws_secret_access_key="test-secret-key",
+        ),
     )
-    parameters: ConverseRequest = {
+    parameters: ConverseRequestTypeDef = {
         "modelId": "amazon.nova-micro-v1:0",
         "messages": [{"role": "user", "content": [{"text": "hello"}]}],
     }
-    response: ConverseResponse = {
+    response = {
         "output": {"message": {"role": "assistant", "content": [{"text": "hello"}]}},
         "stopReason": "end_turn",
         "usage": {
