@@ -1,0 +1,63 @@
+version: "3"
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+tasks:
+  default:
+    desc: Show available commands
+    cmds:
+      - task --list-all
+
+  install:
+    desc: Install Python dependencies
+    cmds:
+      - uv sync --group dev --extra redaction
+
+  format:
+    desc: Format repository code
+    cmds:
+      - uv run ruff format
+      - uv run ruff check --fix
+
+  format-check:
+    desc: Check the code format without modifying files
+    cmds:
+      - uv run ruff format --check
+
+  lint:
+    desc: Run lint checks
+    cmds:
+      - uv run ruff check src/ tests/
+
+  type-check:
+    desc: Run static type checks
+    cmds:
+      - uv run mypy src/ tests/
+
+  check:
+    desc: Run formatting, lint, and type checks
+    deps: [format-check, lint, type-check]
+
+  test:
+    desc: Run all tests
+    aliases: [tests]
+    cmds:
+      - uv run pytest -m "not e2e" --max-warnings=0 --cov=digintlab_langfuse --cov-report=term-missing
+
+  test-verbose:
+    desc: Run all tests with verbose output
+    cmds:
+      - uv run pytest -m "not e2e" -v --max-warnings=0 --cov=digintlab_langfuse --cov-report=term-missing
+
+  test-e2e:
+    desc: Run authenticated tests against the configured dedicated Langfuse project
+    env:
+      RUN_LANGFUSE_E2E: "1"
+    cmds:
+      - uv run pytest -m e2e --max-warnings=1 tests/e2e/
+
+  build:
+    desc: Build wheel and source distribution
+    cmds:
+      - uv build --no-build-isolation
