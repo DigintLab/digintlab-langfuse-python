@@ -1,12 +1,14 @@
 """Offline regression checks for upstream score delivery and Bedrock usage telemetry."""
 
 import json
+import warnings
 from uuid import uuid4
 
-import botocore.session  # type: ignore[import-untyped]  # botocore has no py.typed marker.
+import botocore.session
 import httpx
 import pytest
-from botocore.stub import Stubber  # type: ignore[import-untyped]  # The SDK does not provide type hints.
+from botocore.client import ConverseRequest, ConverseResponse
+from botocore.stub import Stubber
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.semconv._incubating.attributes.gen_ai_attributes import (
@@ -18,9 +20,6 @@ from digintlab_langfuse import LangfuseClientConfig, init_langfuse_telemetry
 from digintlab_langfuse.scores import NumericScore, ScoreTarget
 
 
-# Langfuse 5.0.4's backoff dependency uses deprecated asyncio.iscoroutinefunction.
-# Keep unrelated warning checks strict; ignore only this upstream warning in this test.
-@pytest.mark.filterwarnings("ignore:'asyncio.iscoroutinefunction' is deprecated.*:DeprecationWarning:backoff\\._decorator")
 @pytest.mark.asyncio
 async def test_flush_delivers_pending_scores_without_waiting_for_batch_interval() -> None:
     """A library flush should drain SDK score tasks, not just OTEL spans."""
@@ -30,32 +29,46 @@ async def test_flush_delivers_pending_scores_without_waiting_for_batch_interval(
         requests.append(request)
         return httpx.Response(202, json={"message": "Accepted"})
 
-    with httpx.Client(transport=httpx.MockTransport(respond)) as http_client:
-        telemetry = init_langfuse_telemetry(
-            LangfuseClientConfig(
-                public_key=f"pk-score-flush-{uuid4()}",
-                secret_key="test-secret",
-                httpx_client=http_client,
-                span_exporter=InMemorySpanExporter(),
-                flush_at=100,
-                flush_interval=60.0,
-            ),
-        )
-        async with telemetry:
-            telemetry.emit_score(
-                score=NumericScore(name="quality", value=0.9),
-                target=ScoreTarget(trace_id="a" * 32),
+    # The pinned Langfuse SDK calls archived backoff 2.2.1 from its score worker.
+    # Record the known upstream warning; keep all unexpected warnings actionable.
+    with warnings.catch_warnings(record=True) as observed_warnings:
+        warnings.simplefilter("always", DeprecationWarning)
+        with httpx.Client(transport=httpx.MockTransport(respond)) as http_client:
+            telemetry = init_langfuse_telemetry(
+                LangfuseClientConfig(
+                    public_key=f"pk-score-flush-{uuid4()}",
+                    secret_key="test-secret",
+                    httpx_client=http_client,
+                    span_exporter=InMemorySpanExporter(),
+                    flush_at=100,
+                    flush_interval=60.0,
+                ),
             )
-            await telemetry.flush()
-            score_requests = [request for request in requests if request.url.path == "/api/public/scores"]
-            assert len(score_requests) == 1
-            scores = json.loads(score_requests[0].content)
-            assert len(scores) == 1
-            assert scores[0]["traceId"] == "a" * 32
-            assert scores[0]["name"] == "quality"
-            assert scores[0]["value"] == 0.9
-            assert scores[0]["dataType"] == "NUMERIC"
-
+            async with telemetry:
+                telemetry.emit_score(
+                    score=NumericScore(name="quality", value=0.9),
+                    target=ScoreTarget(trace_id="a" * 32),
+                )
+                await telemetry.flush()
+                score_requests = [request for request in requests if request.url.path == "/api/public/scores"]
+                assert len(score_requests) == 1
+                scores = json.loads(score_requests[0].content)
+                assert len(scores) == 1
+                assert scores[0]["traceId"] == "a" * 32
+                assert scores[0]["name"] == "quality"
+                assert scores[0]["value"] == 0.9
+                assert scores[0]["dataType"] == "NUMERIC"
+    
+    unexpected_warnings = [
+        f"{warning.category.__name__}: {warning.message}"
+        for warning in observed_warnings
+        if not (
+            issubclass(warning.category, DeprecationWarning)
+            and warning.filename.replace("\\", "/").endswith("/backoff/_decorator.py")
+            and "asyncio.iscoroutinefunction" in str(warning.message)
+        )
+    ]
+    assert not unexpected_warnings
 
 @pytest.mark.asyncio
 async def test_bedrock_converse_preserves_prompt_cache_usage_in_exported_span() -> None:
@@ -77,11 +90,11 @@ async def test_bedrock_converse_preserves_prompt_cache_usage_in_exported_span() 
         aws_access_key_id="test-access-key",
         aws_secret_access_key="test-secret-key",
     )
-    parameters = {
+    parameters: ConverseRequest = {
         "modelId": "amazon.nova-micro-v1:0",
         "messages": [{"role": "user", "content": [{"text": "hello"}]}],
     }
-    response = {
+    response: ConverseResponse = {
         "output": {"message": {"role": "assistant", "content": [{"text": "hello"}]}},
         "stopReason": "end_turn",
         "usage": {

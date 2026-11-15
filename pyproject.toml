@@ -102,7 +102,7 @@ show_error_codes = true
 show_error_context = true
 implicit_reexport = true
 namespace_packages = true
-mypy_path = "src"
+mypy_path = "src,stubs"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
