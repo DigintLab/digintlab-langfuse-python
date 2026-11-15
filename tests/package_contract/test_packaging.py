@@ -2,6 +2,7 @@
 
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -26,15 +27,21 @@ def test_wheel_contains_py_typed(tmp_path: Path) -> None:
     with ZipFile(wheels[0]) as wheel:
         assert "digintlab_langfuse/py.typed" in wheel.namelist()
 
+    constraints = tmp_path / "constraints.txt"
+    venv_dir = tmp_path / "venv"
+    setup_commands = (
+        # Pin the clean install to uv.lock so it reuses cached builds instead of resolving and compiling the newest releases.
+        [uv, "export", "--locked", "--no-dev", "--no-emit-project", "--no-hashes", "--no-header", "--output-file", str(constraints)],
+        [uv, "venv", "--python", sys.executable, str(venv_dir)],
+        [uv, "pip", "install", "--python", str(venv_dir), "--constraint", str(constraints), str(wheels[0])],
+    )
+    for command in setup_commands:
+        setup_result = subprocess.run(command, cwd=repo_root, text=True, capture_output=True, check=False)  # noqa: S603
+        assert setup_result.returncode == 0, setup_result.stdout + setup_result.stderr
+
     import_result = subprocess.run(  # noqa: S603
         [
-            uv,
-            "run",
-            "--isolated",
-            "--no-project",
-            "--with",
-            str(wheels[0]),
-            "python",
+            str(venv_dir / "bin" / "python"),
             "-c",
             (
                 "import digintlab_langfuse\n"

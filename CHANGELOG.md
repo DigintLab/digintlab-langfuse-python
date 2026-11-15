@@ -4,14 +4,16 @@ All notable changes to this package are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-15
+
 ### Added
 
-- Shorter README with a module overview and a limitations section.
 - Tag-triggered release workflow that checks the tag against the package version, runs the checks, builds and attests the wheel and sdist, and publishes the GitHub release with notes from this changelog.
 
 ### Changed
 
 - Relaxed the Langfuse requirement from an exact pin to the patch releases of the tested minor version (`langfuse>=5.2.0,<5.3`).
+- Shortened the README to a module overview and a limitations section.
 
 ## [0.4.0] - 2026-11-15
 
@@ -50,5 +52,6 @@ All notable changes to this package are documented here. The format follows [Kee
 - Replaced type-specific score convenience methods with the typed `Score` and `ScoreTarget` API.
 - Limited support to Python 3.13–3.14 and Langfuse 4.14.2.
 
-[Unreleased]: https://github.com/DigintLab/digintlab-langfuse-python/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/DigintLab/digintlab-langfuse-python/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/DigintLab/digintlab-langfuse-python/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/DigintLab/digintlab-langfuse-python/releases/tag/v0.4.0
