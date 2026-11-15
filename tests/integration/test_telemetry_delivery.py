@@ -58,7 +58,7 @@ async def test_flush_delivers_pending_scores_without_waiting_for_batch_interval(
                 assert scores[0]["name"] == "quality"
                 assert scores[0]["value"] == 0.9
                 assert scores[0]["dataType"] == "NUMERIC"
-    
+
     unexpected_warnings = [
         f"{warning.category.__name__}: {warning.message}"
         for warning in observed_warnings
@@ -69,6 +69,7 @@ async def test_flush_delivers_pending_scores_without_waiting_for_batch_interval(
         )
     ]
     assert not unexpected_warnings
+
 
 @pytest.mark.asyncio
 async def test_bedrock_converse_preserves_prompt_cache_usage_in_exported_span() -> None:
