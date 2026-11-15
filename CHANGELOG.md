@@ -6,7 +6,7 @@ All notable changes to this package are documented here. The format follows [Kee
 
 ### Added
 
-- README reference for every configuration field and public module, a limitations section, and runnable examples under `examples/`, compiled and run offline in the test suite.
+- Shorter README with a module overview and a limitations section.
 - Tag-triggered release workflow that checks the tag against the package version, runs the checks, builds and attests the wheel and sdist, and publishes the GitHub release with notes from this changelog.
 
 ### Changed
