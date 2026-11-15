@@ -14,6 +14,7 @@ from digintlab_langfuse import (
     init_langfuse_telemetry,
 )
 from digintlab_langfuse._lifecycle import flush_client, shutdown_client
+from digintlab_langfuse.callbacks import ToolSpanCallback
 from digintlab_langfuse.client import _init_langfuse_client
 from digintlab_langfuse.spans import emit_guardrail_observation
 
@@ -122,3 +123,43 @@ def test_initializer_rejects_a_preexisting_same_key_sdk_owner() -> None:
             )
     finally:
         external.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_tool_callback_redacts_credentials_inside_json_string_payloads() -> None:
+    exporter = InMemorySpanExporter()
+    public_key = f"pk-tool-{uuid4()}"
+    telemetry = init_langfuse_telemetry(
+        LangfuseClientConfig(
+            public_key=public_key,
+            secret_key="integration-secret",
+            span_exporter=exporter,
+            tracer_provider=TracerProvider(),
+            sensitive_data_redaction=SensitiveDataRedactionConfig(),
+        ),
+        instrument_httpx=False,
+    )
+    callback = ToolSpanCallback(client_getter=lambda: get_client(public_key=public_key))
+    run_id = uuid4()
+
+    async with telemetry:
+        with (
+            telemetry.trace_call(name="tool-root", session_id="session-1", user_id="user-1", root_observation=True),
+            telemetry.observe_node_span("tool-node", enabled=True),
+        ):
+            callback.on_tool_start(
+                {"name": "login"},
+                '{"username": "alice", "password": "synthetic-password"}',
+                run_id=run_id,
+                inputs={"username": "alice", "password": "synthetic-password"},
+            )
+            callback.on_tool_end('{"session": "ok", "password": "synthetic-password"}', run_id=run_id)
+
+    tool = next(span for span in exporter.get_finished_spans() if span.name == "login")
+    assert tool.attributes is not None
+    exported = json.dumps(dict(tool.attributes))
+    assert "synthetic-password" not in exported
+    assert json.loads(json.loads(str(tool.attributes["langfuse.observation.input"]))["input"]) == {
+        "username": "alice",
+        "password": "[REDACTED]",
+    }
