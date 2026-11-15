@@ -35,10 +35,14 @@ jobs:
             .venv
             .mypy_cache
           key: python-${{ matrix.python }}-venv-${{ hashFiles('uv.lock') }}
+          restore-keys: |
+            python-${{ matrix.python }}-venv-
       - name: Install Task
         uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
         with:
           repo-token: ${{ github.token }}
+      - name: Install Python
+        run: uv python install ${{ matrix.python }}
       - name: Install dependencies
         run: task install
       - name: Format, lint, and type checks
