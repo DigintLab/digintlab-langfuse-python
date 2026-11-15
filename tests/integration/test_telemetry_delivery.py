@@ -3,10 +3,10 @@
 import json
 from uuid import uuid4
 
-import botocore.session
+import botocore.session  # type: ignore[import-untyped]  # botocore has no py.typed marker.
 import httpx
 import pytest
-from botocore.stub import Stubber
+from botocore.stub import Stubber  # type: ignore[import-untyped]  # The SDK does not provide type hints.
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.semconv._incubating.attributes.gen_ai_attributes import (
