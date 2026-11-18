@@ -7,7 +7,7 @@ Typed helpers for tracing, scoring, and redacting agent runs with Langfuse.
 Python 3.13 to 3.15. Not on PyPI; install a tagged release from GitHub:
 
 ```bash
-uv add "digintlab-langfuse-python @ git+https://github.com/DigintLab/digintlab-langfuse-python@v0.5.0"
+uv add "digintlab-langfuse-python @ git+https://github.com/DigintLab/digintlab-langfuse-python@v0.5.1"
 ```
 
 Add the `[redaction]` extra for PII detection. Each [release](https://github.com/DigintLab/digintlab-langfuse-python/releases) also ships a wheel and an sdist.
