@@ -4,6 +4,12 @@ All notable changes to this package are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-18
+
+### Changed
+
+- Updated locked dependencies: filelock from 3.32.4 to 4.2.1, msgpack from 1.2.2 to 1.2.3, setuptools from 84.0.0 to 84.1.0, and urllib3 from 2.7.0 to 2.8.0.
+
 ## [0.5.0] - 2026-11-15
 
 ### Added
@@ -52,6 +58,7 @@ All notable changes to this package are documented here. The format follows [Kee
 - Replaced type-specific score convenience methods with the typed `Score` and `ScoreTarget` API.
 - Limited support to Python 3.13–3.14 and Langfuse 4.14.2.
 
-[Unreleased]: https://github.com/DigintLab/digintlab-langfuse-python/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/DigintLab/digintlab-langfuse-python/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/DigintLab/digintlab-langfuse-python/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/DigintLab/digintlab-langfuse-python/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/DigintLab/digintlab-langfuse-python/releases/tag/v0.4.0
